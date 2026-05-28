@@ -12,6 +12,7 @@ from voice.command_parser import parse
 
 _recorder = AudioRecorder()
 _busy = threading.Lock()
+_wake_listener = None
 
 
 def set_indicator(indicator):
@@ -260,7 +261,8 @@ def start(indicator=None):
     listener = HotkeyListener(on_start=_on_start, on_stop=_on_stop)
     listener.start()
 
+    global _wake_listener
     from voice.wake_clap import WakeGestureListener
-    wake_listener = WakeGestureListener(on_wake=_on_start)
-    wake_listener.start()
+    _wake_listener = WakeGestureListener(on_wake=_on_start)
+    _wake_listener.start()
     print("[SES] Çift alkış dinleyicisi başlatıldı.")

@@ -29,14 +29,14 @@ def _rms(data: bytes) -> float:
 class WakeGestureListener:
     def __init__(self, on_wake: Callable[[], None]):
         self._on_wake = on_wake
-        self._running = False
+        self._running = threading.Event()
 
     def start(self):
-        self._running = True
+        self._running.set()
         threading.Thread(target=self._loop, daemon=True, name="WakeClap").start()
 
     def stop(self):
-        self._running = False
+        self._running.clear()
 
     def _loop(self):
         pa     = pyaudio.PyAudio()
@@ -49,7 +49,7 @@ class WakeGestureListener:
         )
         clap_times: list[float] = []
         try:
-            while self._running:
+            while self._running.is_set():
                 data = stream.read(CHUNK, exception_on_overflow=False)
                 rms  = _rms(data)
                 now  = time.monotonic()

@@ -8,6 +8,16 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()
 
+_groq_client = None
+
+
+def _get_client():
+    global _groq_client
+    if _groq_client is None:
+        from groq import Groq
+        _groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY") or None)
+    return _groq_client
+
 
 def is_ready() -> bool:
     """Groq API key mevcut mu kontrol et."""
@@ -28,8 +38,7 @@ def preload(on_complete=None):
 def transcribe(audio_path: str) -> str:
     """WAV dosyasını Groq Whisper API ile transkribe et."""
     try:
-        from groq import Groq
-        client = Groq(api_key=os.environ.get("GROQ_API_KEY") or None)
+        client = _get_client()
         with open(audio_path, "rb") as f:
             audio_data = f.read()
         transcription = client.audio.transcriptions.create(
