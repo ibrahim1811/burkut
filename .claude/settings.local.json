@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(py *)",
+      "Bash(python -m pip install -r requirements.txt)",
+      "Bash(python *)",
+      "Bash(where python *)",
+      "PowerShell(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(pip install *)",
+      "Bash(py -3.11 -m pip install opencv-python sounddevice scipy)",
+      "PowerShell(Stop-Process *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Kayra\\\\PcBot\" -Recurse -Force)",
+      "Bash(Select-Object -Property FullName, PSIsContainer)",
+      "Bash(Sort-Object FullName)",
+      "Bash(dir \"%APPDATA%\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Startup\\\\\" 2>&1 *)",
+      "PowerShell(Get-ChildItem *)",
+      "Bash(tasklist /fi \"imagename eq pythonw.exe\" /fo csv)",
+      "PowerShell(Get-Process *)",
+      "Bash(del \"C:\\\\Users\\\\Kayra\\\\PcBot\\\\logs\\\\chat_test2.jpg\")"
+    ]
+  }
+}
