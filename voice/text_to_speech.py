@@ -1,62 +1,54 @@
-import threading
-import queue
-import pyttsx3
+"""
+TTS — edge-tts ile Türkçe sesli yanıt.
+"""
 
-_engine = None
+import asyncio
+import os
+import queue
+import tempfile
+import threading
+
+import sounddevice as sd
+import soundfile as sf
+
+VOICE = "tr-TR-AhmetNeural"
+
 _tts_queue: queue.Queue = queue.Queue()
 _tts_thread = None
 _ready = threading.Event()
 
 
+async def _synthesize(text: str, output_path: str) -> None:
+    import edge_tts
+    communicate = edge_tts.Communicate(text, VOICE)
+    await communicate.save(output_path)
+
+
 def _tts_worker():
-    global _engine
-    try:
-        _engine = pyttsx3.init()
-        _engine.setProperty("rate", 165)
-        _engine.setProperty("volume", 1.0)
-
-        voices = _engine.getProperty("voices")
-        # Türkçe ses ara
-        turkish_voice = None
-        for v in voices:
-            vid = v.id.lower()
-            vname = v.name.lower()
-            if "tr" in vid or "turkish" in vid or "turkish" in vname or "türk" in vname:
-                turkish_voice = v.id
-                break
-        # Bulunamazsa mevcut ilk Türkçe benzeri veya genel
-        if turkish_voice:
-            _engine.setProperty("voice", turkish_voice)
-            print(f"[TTS] Türkçe ses: {turkish_voice}")
-        else:
-            # İlk sesi kullan (genellikle yerel dil)
-            if voices:
-                _engine.setProperty("voice", voices[0].id)
-            print("[TTS] Türkçe ses bulunamadı, varsayılan kullanılıyor.")
-
-    except Exception as e:
-        print(f"[TTS] Motor başlatılamadı: {e}")
-        _ready.set()
-        return
-
     _ready.set()
-
     while True:
         try:
             text = _tts_queue.get(timeout=0.5)
-            if text is None:
-                break
-            try:
-                _engine.say(text)
-                _engine.runAndWait()
-            except Exception as e:
-                print(f"[TTS] Konuşma hatası: {e}")
-                try:
-                    _engine.stop()
-                except Exception:
-                    pass
         except queue.Empty:
             continue
+        if text is None:
+            break
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+                tmp = f.name
+            asyncio.run(_synthesize(text, tmp))
+            data, sr = sf.read(tmp)
+            sd.play(data, sr)
+            sd.wait()
+        except Exception as e:
+            print(f"[TTS] edge-tts hatası: {e}")
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
 
 
 def start():
