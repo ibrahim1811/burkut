@@ -1,382 +1,286 @@
 """
-BÜRKÜT AI Sohbet Penceresi — widget üzerinden PC'de AI ile konuşma.
+BÜRKÜT AI Sohbet Penceresi.
 """
-
 import asyncio
 import threading
 import uuid
 import re
-import datetime
-import os
-import tempfile
-import tkinter as tk
-import customtkinter as ctk
-from pathlib import Path
 import sys
-
+from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ── Renk paleti ──────────────────────────────────────────────────────────────
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser,
+    QTextEdit, QPushButton, QLabel, QSizePolicy, QScrollBar
+)
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QSize
+from PySide6.QtGui import QFont, QKeyEvent, QTextCursor
+
+
 BG       = "#0d1117"
 BG_CARD  = "#161b22"
 BG_INPUT = "#1c2128"
-BG_CODE  = "#1a1d27"
 BORDER   = "#30363d"
 ACCENT   = "#e2b96a"
 T1       = "#f0f6fc"
 T2       = "#8b949e"
 C_USER   = "#79c0ff"
 C_AI     = "#3fb950"
-C_CODE   = "#e2b96a"
-C_ERR    = "#ff7b72"
-C_ACT    = "#d2a8ff"
 
 
-def _parse_segments(text: str) -> list:
-    """Metni (tip, içerik) listesine böl: 'text' veya 'code'."""
-    segs = []
+def _to_html(text: str) -> str:
+    """Metni HTML'e çevir. Kod bloklarını <pre> ile sar."""
+    parts = []
     last = 0
     for m in re.finditer(r"```(?:\w+)?\n?(.*?)```", text, re.DOTALL):
         before = text[last:m.start()].strip()
         if before:
-            segs.append(("text", before))
+            parts.append(f"<p style='margin:2px 0; white-space:pre-wrap;'>{before}</p>")
         code = m.group(1).rstrip()
-        if code:
-            segs.append(("code", code))
+        parts.append(
+            f"<pre style='background:#1a1d27;border-radius:4px;padding:8px;"
+            f"font-family:Consolas,monospace;font-size:10px;"
+            f"color:#e2b96a;margin:4px 0;white-space:pre-wrap;'>{code}</pre>"
+        )
         last = m.end()
     tail = text[last:].strip()
     if tail:
-        segs.append(("text", tail))
-    return segs or [("text", text)]
+        parts.append(f"<p style='margin:2px 0; white-space:pre-wrap;'>{tail}</p>")
+    return "".join(parts) or f"<p>{text}</p>"
 
 
-class AIChatWindow(ctk.CTkToplevel):
-    """Singleton sohbet penceresi — get_or_create() ile aç."""
+class _Signals(QObject):
+    message_ready = Signal(str, str, str)   # role, text, color
 
+
+class AIChatWindow(QWidget):
     _instance = None
 
     @classmethod
-    def get_or_create(cls, parent):
-        if cls._instance is None or not cls._instance.winfo_exists():
-            cls._instance = cls(parent)
+    def get_or_create(cls, parent=None):
+        if cls._instance is None or not cls._instance.isVisible():
+            if cls._instance is not None:
+                cls._instance.show()
+                cls._instance.raise_()
+                cls._instance.activateWindow()
+            else:
+                cls._instance = cls()
+                cls._instance.show()
         else:
-            cls._instance.deiconify()
-            cls._instance.lift()
-            cls._instance.focus_force()
+            cls._instance.raise_()
+            cls._instance.activateWindow()
         return cls._instance
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        ctk.set_appearance_mode("dark")
-
-        self.title("Bürküt AI")
-        self.geometry("500x660")
-        self.minsize(380, 440)
-        self.configure(fg_color=BG)
-        self.attributes("-topmost", True)
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.Window | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowTitle("Bürküt AI")
+        self.resize(500, 640)
+        self.setMinimumSize(380, 440)
 
         self._session_id = str(uuid.uuid4())
         self._thinking   = False
-        self._img_refs   = []
-        self._tmp_files  = []   # geçici ekran görüntüsü dosyaları
-
-        # Arka plan asyncio loop
-        self._loop = asyncio.new_event_loop()
-        threading.Thread(target=self._loop.run_forever, daemon=True).start()
+        self._signals    = _Signals()
+        self._signals.message_ready.connect(self._append_message)
+        self._drag_pos   = None
 
         self._build_ui()
-        self.protocol("WM_DELETE_WINDOW", self.withdraw)
-        self.after(400, self._greet)
-
-    # ════════════════════════════════════════════════════════════════
-    # Arayüz inşası
-    # ════════════════════════════════════════════════════════════════
+        self._greet()
 
     def _build_ui(self):
-        # ── 1. BAŞLIK ÇUBUĞU (üst, sabit)
-        bar = tk.Frame(self, bg=BG_CARD, height=42)
-        bar.pack(side="top", fill="x")
-        bar.pack_propagate(False)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        tk.Label(
-            bar, text="🦅  Bürküt AI",
-            bg=BG_CARD, fg=ACCENT,
-            font=("Segoe UI", 11, "bold"),
-        ).pack(side="left", padx=12, pady=0)
+        # Container with border
+        container = QWidget()
+        container.setObjectName("container")
+        container.setStyleSheet(f"""
+            #container {{
+                background: {BG};
+                border: 1px solid {BORDER};
+                border-radius: 12px;
+            }}
+        """)
+        root.addWidget(container)
 
-        self._status_lbl = tk.Label(
-            bar, text="● hazır",
-            bg=BG_CARD, fg=C_AI,
-            font=("Segoe UI", 8),
-        )
-        self._status_lbl.pack(side="left", padx=4)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        _btn = dict(
-            bg=BG_CARD, fg=T2,
-            font=("Segoe UI", 12), relief="flat",
-            cursor="hand2", bd=0,
-            activebackground="#21262d", activeforeground=T1,
-            padx=7, pady=6,
-        )
-        tk.Button(bar, text="✕", command=self.withdraw,  **_btn).pack(side="right", padx=2)
-        tk.Button(bar, text="🗑", command=self._clear,    **_btn).pack(side="right")
-        tk.Button(bar, text="📌", command=self._pin,      **_btn).pack(side="right")
+        # Header
+        header = QWidget()
+        header.setFixedHeight(40)
+        header.setStyleSheet(f"background: {BG_CARD}; border-radius: 12px 12px 0 0;")
+        header.mousePressEvent   = self._hdr_press
+        header.mouseMoveEvent    = self._hdr_move
+        header.mouseReleaseEvent = self._hdr_release
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(12, 0, 8, 0)
 
-        # ── 2. GİRİŞ ALANI (alt, sabit) — ÖNCE PACK ET!
-        bottom = tk.Frame(self, bg=BG_CARD)
-        bottom.pack(side="bottom", fill="x")
+        title = QLabel("🤖  Bürküt AI")
+        title.setStyleSheet(f"color: {ACCENT}; font-size: 11px; font-weight: bold;")
+        h_layout.addWidget(title)
+        h_layout.addStretch()
 
-        # Input kutusu
-        input_wrap = tk.Frame(bottom, bg=BORDER, bd=1)
-        input_wrap.pack(fill="x", padx=10, pady=(10, 4))
+        clear_btn = QPushButton("🗑")
+        clear_btn.setFixedSize(26, 26)
+        clear_btn.setStyleSheet(f"background: transparent; border: none; color: {T2}; font-size: 12px;")
+        clear_btn.setToolTip("Geçmişi temizle")
+        clear_btn.clicked.connect(self._clear_chat)
+        h_layout.addWidget(clear_btn)
 
-        self._input = tk.Text(
-            input_wrap,
-            bg=BG_INPUT, fg=T1,
-            font=("Segoe UI", 11),
-            wrap="word",
-            relief="flat",
-            highlightthickness=0,
-            insertbackground=T1,
-            height=3,
-            padx=10, pady=8,
-            selectbackground="#1c3a5e",
-            selectforeground=T1,
-        )
-        self._input.pack(fill="x")
-        self._input.bind("<Return>",         self._on_enter)
-        self._input.bind("<Shift-Return>",   lambda e: None)
-        self._input.bind("<Control-Return>", lambda e: self._do_send() or "break")
-        self._input.focus_set()
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(26, 26)
+        close_btn.setStyleSheet("background: transparent; border: none; color: #f0f6fc; font-size: 11px;")
+        close_btn.clicked.connect(self.hide)
+        h_layout.addWidget(close_btn)
 
-        # Gönder satırı
-        send_row = tk.Frame(bottom, bg=BG_CARD)
-        send_row.pack(fill="x", padx=10, pady=(0, 8))
+        layout.addWidget(header)
 
-        tk.Label(
-            send_row,
-            text="Enter ↵ gönder  •  Shift+Enter yeni satır",
-            bg=BG_CARD, fg=T2, font=("Segoe UI", 8),
-        ).pack(side="left")
+        # Chat area
+        self._chat = QTextBrowser()
+        self._chat.setOpenExternalLinks(True)
+        self._chat.setStyleSheet(f"""
+            QTextBrowser {{
+                background: {BG};
+                border: none;
+                padding: 8px;
+                color: {T1};
+                font-size: 12px;
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            QScrollBar:vertical {{
+                background: {BG_CARD};
+                width: 6px;
+                border-radius: 3px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {BORDER};
+                border-radius: 3px;
+            }}
+        """)
+        layout.addWidget(self._chat, 1)
 
-        self._send_btn = tk.Button(
-            send_row,
-            text="Gönder  ↵",
-            bg=ACCENT, fg="#0d1117",
-            font=("Segoe UI", 9, "bold"),
-            relief="flat", cursor="hand2",
-            padx=14, pady=5,
-            activebackground="#c9a050", activeforeground="#0d1117",
-            command=self._do_send,
-        )
-        self._send_btn.pack(side="right")
+        # Input area
+        input_bar = QWidget()
+        input_bar.setStyleSheet(f"background: {BG_CARD}; border-radius: 0 0 12px 12px;")
+        inp_layout = QHBoxLayout(input_bar)
+        inp_layout.setContentsMargins(8, 6, 8, 8)
+        inp_layout.setSpacing(6)
 
-        # ── 3. AYIRICI
-        tk.Frame(self, bg=BORDER, height=1).pack(side="bottom", fill="x")
+        self._input = QTextEdit()
+        self._input.setPlaceholderText("Bir şeyler yazın... (Enter = gönder, Shift+Enter = yeni satır)")
+        self._input.setFixedHeight(52)
+        self._input.setStyleSheet(f"""
+            QTextEdit {{
+                background: {BG_INPUT};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
+                padding: 6px;
+                color: {T1};
+                font-size: 12px;
+            }}
+        """)
+        self._input.installEventFilter(self)
+        inp_layout.addWidget(self._input, 1)
 
-        # ── 4. MESAJ ALANI (ortada, genişler)
-        chat_wrap = tk.Frame(self, bg=BG)
-        chat_wrap.pack(side="top", fill="both", expand=True)
+        send_btn = QPushButton("➤")
+        send_btn.setFixedSize(36, 36)
+        send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: #1a3a1a;
+                border: 1px solid #2d4a2d;
+                border-radius: 6px;
+                color: #3fb950;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{ background: #253525; }}
+        """)
+        send_btn.clicked.connect(self._send)
+        inp_layout.addWidget(send_btn)
 
-        self._chat = tk.Text(
-            chat_wrap,
-            bg=BG, fg=T1,
-            font=("Segoe UI", 11),
-            state="disabled",
-            wrap="word",
-            relief="flat",
-            highlightthickness=0,
-            cursor="arrow",
-            selectbackground="#1c3a5e",
-            selectforeground=T1,
-            padx=12, pady=10,
-            spacing1=2, spacing3=6,
-        )
-        vsb = tk.Scrollbar(
-            chat_wrap, command=self._chat.yview,
-            bg=BG_CARD, troughcolor=BG,
-            activebackground=BORDER,
-            width=8, bd=0, highlightthickness=0,
-        )
-        self._chat.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        self._chat.pack(side="left", fill="both", expand=True)
+        layout.addWidget(input_bar)
 
-        # Tag tanımları
-        self._chat.tag_configure("user_lbl",  foreground=C_USER,  font=("Segoe UI", 9, "bold"))
-        self._chat.tag_configure("ai_lbl",    foreground=C_AI,    font=("Segoe UI", 9, "bold"))
-        self._chat.tag_configure("time_tag",  foreground=T2,      font=("Segoe UI", 8))
-        self._chat.tag_configure("user_msg",  foreground=T1,      font=("Segoe UI", 11))
-        self._chat.tag_configure("ai_msg",    foreground=T1,      font=("Segoe UI", 11))
-        self._chat.tag_configure("code_tag",  foreground=C_CODE,  font=("Consolas", 10),
-                                  background=BG_CODE, lmargin1=16, lmargin2=16, rmargin=8)
-        self._chat.tag_configure("action_tag", foreground=C_ACT,  font=("Segoe UI", 10))
-        self._chat.tag_configure("err_tag",   foreground=C_ERR,   font=("Segoe UI", 11))
+    def eventFilter(self, obj, event):
+        if obj is self._input and event.type() == event.KeyPress:
+            if event.key() == Qt.Key_Return and not (event.modifiers() & Qt.ShiftModifier):
+                self._send()
+                return True
+        return super().eventFilter(obj, event)
 
-    # ════════════════════════════════════════════════════════════════
-    # Yardımcı metodlar
-    # ════════════════════════════════════════════════════════════════
+    def _hdr_press(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
-    def _pin(self):
-        cur = bool(self.attributes("-topmost"))
-        self.attributes("-topmost", not cur)
+    def _hdr_move(self, event):
+        if self._drag_pos and event.buttons() & Qt.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
 
-    def _set_status(self, text: str, color: str = T2):
-        self.after(0, lambda: self._status_lbl.configure(text=text, fg=color))
-
-    def _set_thinking(self, on: bool):
-        self._thinking = on
-        if on:
-            self._set_status("● düşünüyor...", "#f0a030")
-            self.after(0, lambda: self._send_btn.configure(state="disabled", bg="#444", fg=T2))
-        else:
-            self._set_status("● hazır", C_AI)
-            self.after(0, lambda: self._send_btn.configure(state="normal", bg=ACCENT, fg="#0d1117"))
-
-    # ── Mesaj ekleme ──────────────────────────────────────────────────
-
-    def _append(
-        self,
-        label: str, label_tag: str,
-        text: str,  msg_tag: str,
-        action_lines: list = None,
-    ):
-        now = datetime.datetime.now().strftime("%H:%M")
-
-        def _do():
-            self._chat.configure(state="normal")
-            self._chat.insert("end", "\n")
-            self._chat.insert("end", f"  {label}  ", label_tag)
-            self._chat.insert("end", f"{now}\n", "time_tag")
-
-            for seg_type, seg_text in _parse_segments(text):
-                tag = "code_tag" if seg_type == "code" else msg_tag
-                self._chat.insert("end", f"  {seg_text}\n", tag)
-
-            if action_lines:
-                for line in action_lines:
-                    if line and line.strip():
-                        self._chat.insert("end", f"  ⚙ {line.strip()[:200]}\n", "action_tag")
-
-            self._chat.configure(state="disabled")
-            self._chat.see("end")
-
-        self.after(0, _do)
-
-    def _append_image(self, img_bytes: bytes):
-        """Ekran görüntüsünü chat'e thumbnail olarak ekle."""
-        try:
-            from PIL import Image
-            import io as _io
-            import base64
-
-            full = Image.open(_io.BytesIO(img_bytes))
-            max_w = 430
-            r = min(1.0, max_w / full.width)
-            thumb = full.resize((int(full.width * r), int(full.height * r)), Image.LANCZOS)
-
-            # Tam boyutu geçici dosyaya kaydet (tıklanınca açılır)
-            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False, prefix="burkut_")
-            full.save(tmp.name, quality=92)
-            tmp.close()
-            self._tmp_files.append(tmp.name)  # temizlik için takip et
-
-            # tk.PhotoImage base64 PNG bekler
-            buf = _io.BytesIO()
-            thumb.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-            photo = tk.PhotoImage(data=b64)
-            self._img_refs.append(photo)
-
-            def _insert(ph=photo, path=tmp.name):
-                self._chat.configure(state="normal")
-                lbl = tk.Label(self._chat, image=ph, bg=BG, cursor="hand2")
-                lbl.bind("<Button-1>", lambda e: os.startfile(path))
-                self._chat.window_create("end", window=lbl, padx=12, pady=6)
-                self._chat.insert("end", "\n")
-                self._chat.configure(state="disabled")
-                self._chat.see("end")
-
-            self.after(0, _insert)
-        except Exception as e:
-            self._append("", "ai_lbl", f"(Görüntü gösterilemedi: {e})", "err_tag")
-
-    # ── Karşılama ─────────────────────────────────────────────────────
+    def _hdr_release(self, event):
+        self._drag_pos = None
 
     def _greet(self):
         from ai.brain import is_groq_available, get_available_models
         if is_groq_available():
             models = get_available_models()
-            model_str = models[0] if models else "yükleniyor..."
-            msg = (
-                f"Merhaba! Ben Bürküt 🦅   (model: {model_str})\n\n"
-                "Ne yapmamı istersin? Örneğin:\n"
-                "• Ekran görüntüsü al\n"
-                "• Chrome'u aç ve YouTube'a git\n"
-                "• Python ile merhaba dünya yaz\n"
-                "• Hava durumu nedir?\n"
-                "• https://... analiz et"
-            )
+            model = models[0] if models else "llama-3.3-70b-versatile"
+            msg = f"Merhaba! Ben Bürküt AI, {model} modeliyle çalışıyorum. Nasıl yardımcı olabilirim?"
         else:
-            msg = (
-                "⚠️ Groq API anahtarı eksik!\n\n"
-                "`.env` dosyasına şunu ekle:\n"
-                "    GROQ_API_KEY=<anahtarın>\n\n"
-                "Anahtar almak için: https://console.groq.com"
-            )
-        self._append("Bürküt", "ai_lbl", msg, "ai_msg")
+            msg = "⚠️ Groq API bağlantısı yok. GROQ_API_KEY değişkenini .env dosyasına ekleyin."
+        self._append_message("ai", msg, C_AI)
 
-    def _clear(self):
-        from ai.memory import clear_session
-        clear_session(self._session_id)
-        self._session_id = str(uuid.uuid4())
-        self._chat.configure(state="normal")
-        self._chat.delete("1.0", "end")
-        self._chat.configure(state="disabled")
-        self._img_refs.clear()
-        for f in self._tmp_files:
-            try:
-                os.unlink(f)
-            except Exception:
-                pass
-        self._tmp_files.clear()
-        self._greet()
+    def _append_message(self, role: str, text: str, color: str):
+        cursor = self._chat.textCursor()
+        cursor.movePosition(QTextCursor.End)
 
-    # ── Gönderme ──────────────────────────────────────────────────────
+        if role == "user":
+            prefix = f"<div style='margin:6px 0;'><span style='color:{C_USER};font-weight:bold;font-size:11px;'>Sen</span><br>"
+        else:
+            prefix = f"<div style='margin:6px 0;'><span style='color:{color};font-weight:bold;font-size:11px;'>Bürküt</span><br>"
 
-    def _on_enter(self, event):
-        if event.state & 0x1:   # Shift basılı → normal newline
-            return None
-        self._do_send()
-        return "break"
+        body = _to_html(text)
+        html = prefix + f"<span style='color:{color};'>{body}</span></div>"
+        self._chat.append(html)
 
-    def _do_send(self, *_):
-        if self._thinking:
+        # Scroll to bottom
+        sb = self._chat.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _send(self):
+        text = self._input.toPlainText().strip()
+        if not text or self._thinking:
             return
-        text = self._input.get("1.0", "end").strip()
-        if not text:
-            return
-        self._input.delete("1.0", "end")
-        self._append("Kayra", "user_lbl", text, "user_msg")
-        self._set_thinking(True)
+        self._input.clear()
+        self._append_message("user", text, C_USER)
+        self._thinking = True
+        self._append_message("ai", "⌛ Düşünüyor...", T2)
+        threading.Thread(target=self._run_ai, args=(text,), daemon=True).start()
 
-        asyncio.run_coroutine_threadsafe(
-            self._run_ai(text), self._loop
-        ).add_done_callback(self._on_done)
-
-    async def _run_ai(self, text: str):
-        from ai.brain import BurkutBrain
-        return await BurkutBrain(self._session_id).chat(text, chat_id=0)
-
-    def _on_done(self, future):
+    def _run_ai(self, text: str):
         try:
-            text_resp, actions, images = future.result()
-        except Exception as e:
-            self._append("Hata", "ai_lbl", str(e), "err_tag")
-            self._set_thinking(False)
-            return
+            from ai.brain import BurkutBrain
+            brain = BurkutBrain(self._session_id)
+            loop  = asyncio.new_event_loop()
+            clean, actions, _ = loop.run_until_complete(
+                brain.chat(text, chat_id=0)
+            )
+            loop.close()
 
-        self._append("Bürküt", "ai_lbl", text_resp, "ai_msg", action_lines=actions)
-        for img in images:
-            self._append_image(img)
-        self._set_thinking(False)
+            # Remove "thinking" placeholder
+            html = self._chat.toHtml()
+            html = html.replace("⌛ Düşünüyor...", "")
+            self._chat.setHtml(html)
+
+            self._signals.message_ready.emit("ai", clean, C_AI)
+            for act in actions:
+                self._signals.message_ready.emit("action", act, "#d2a8ff")
+        except Exception as e:
+            self._signals.message_ready.emit("ai", f"❌ Hata: {e}", "#ff7b72")
+        finally:
+            self._thinking = False
+
+    def _clear_chat(self):
+        self._chat.clear()
+        self._session_id = str(uuid.uuid4())
+        self._greet()

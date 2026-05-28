@@ -1,7 +1,12 @@
-import customtkinter as ctk
+"""
+Sistem istatistikleri paneli.
+"""
 import psutil
-import threading
 import time
+
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QGridLayout
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QFont
 
 
 def _get_gpu_stats():
@@ -9,121 +14,166 @@ def _get_gpu_stats():
         import pynvml
         pynvml.nvmlInit()
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        mem  = pynvml.nvmlDeviceGetMemoryInfo(handle)
         util = pynvml.nvmlDeviceGetUtilizationRates(handle)
         temp = pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)
-        return {
-            "usage": util.gpu,
-            "vram_used": mem.used,
-            "vram_total": mem.total,
-            "temp": temp,
-        }
+        return {"usage": util.gpu, "vram_used": mem.used, "vram_total": mem.total, "temp": temp}
     except Exception:
         return None
 
 
-class StatsPanel(ctk.CTkFrame):
-    def __init__(self, parent, **kwargs):
-        super().__init__(parent, **kwargs)
+class _StatsWorker(QThread):
+    stats_ready = Signal(float, object, object, float, float)  # cpu, ram, gpu, dl, ul
 
+    def __init__(self):
+        super().__init__()
+        self._running = True
         self._net_last = psutil.net_io_counters()
         self._net_last_time = time.time()
-        self._running = True
-
-        self._build_ui()
-        self._start_update_loop()
-
-    def _build_ui(self):
-        self.configure(fg_color="transparent")
-
-        label_font = ctk.CTkFont(size=11, weight="bold")
-        val_font   = ctk.CTkFont(size=11)
-
-        self._cpu_label = ctk.CTkLabel(self, text="CPU", font=label_font, anchor="w")
-        self._cpu_label.pack(fill="x", padx=8, pady=(6, 0))
-        self._cpu_bar = ctk.CTkProgressBar(self, height=10, corner_radius=4)
-        self._cpu_bar.pack(fill="x", padx=8, pady=(2, 0))
-        self._cpu_val = ctk.CTkLabel(self, text="0%", font=val_font, anchor="e", text_color="gray")
-        self._cpu_val.pack(fill="x", padx=8)
-
-        self._ram_label = ctk.CTkLabel(self, text="RAM", font=label_font, anchor="w")
-        self._ram_label.pack(fill="x", padx=8, pady=(4, 0))
-        self._ram_bar = ctk.CTkProgressBar(self, height=10, corner_radius=4)
-        self._ram_bar.pack(fill="x", padx=8, pady=(2, 0))
-        self._ram_val = ctk.CTkLabel(self, text="0 GB / 0 GB", font=val_font, anchor="e", text_color="gray")
-        self._ram_val.pack(fill="x", padx=8)
-
-        self._gpu_label = ctk.CTkLabel(self, text="GPU", font=label_font, anchor="w")
-        self._gpu_label.pack(fill="x", padx=8, pady=(4, 0))
-        self._gpu_bar = ctk.CTkProgressBar(self, height=10, corner_radius=4)
-        self._gpu_bar.pack(fill="x", padx=8, pady=(2, 0))
-        self._gpu_val = ctk.CTkLabel(self, text="0% | VRAM: 0/0 GB", font=val_font, anchor="e", text_color="gray")
-        self._gpu_val.pack(fill="x", padx=8)
-
-        self._net_label = ctk.CTkLabel(self, text="AĞ", font=label_font, anchor="w")
-        self._net_label.pack(fill="x", padx=8, pady=(4, 0))
-        self._net_val = ctk.CTkLabel(self, text="↓ 0 KB/s  ↑ 0 KB/s", font=val_font, anchor="w", text_color="gray")
-        self._net_val.pack(fill="x", padx=8, pady=(0, 4))
-
-    def _update(self):
-        while self._running:
-            try:
-                cpu = psutil.cpu_percent(interval=1)
-                ram = psutil.virtual_memory()
-
-                net_now = psutil.net_io_counters()
-                t_now = time.time()
-                dt = max(t_now - self._net_last_time, 0.001)
-                dl = (net_now.bytes_recv - self._net_last.bytes_recv) / dt
-                ul = (net_now.bytes_sent - self._net_last.bytes_sent) / dt
-                self._net_last = net_now
-                self._net_last_time = t_now
-
-                gpu = _get_gpu_stats()
-
-                self.after(0, self._apply_stats, cpu, ram, gpu, dl, ul)
-            except Exception:
-                pass
-            time.sleep(1)
-
-    def _fmt_bytes(self, b):
-        if b < 1024:
-            return f"{b:.0f} B/s"
-        elif b < 1024 ** 2:
-            return f"{b/1024:.1f} KB/s"
-        else:
-            return f"{b/1024**2:.1f} MB/s"
-
-    def _apply_stats(self, cpu, ram, gpu, dl, ul):
-        try:
-            self._cpu_bar.set(cpu / 100)
-            self._cpu_val.configure(text=f"{cpu:.0f}%")
-
-            ram_pct = ram.percent / 100
-            ram_used_gb = ram.used / 1024**3
-            ram_total_gb = ram.total / 1024**3
-            self._ram_bar.set(ram_pct)
-            self._ram_val.configure(text=f"{ram_used_gb:.1f} / {ram_total_gb:.1f} GB  {ram.percent:.0f}%")
-
-            if gpu:
-                gpu_pct = gpu["usage"] / 100
-                vram_used_gb = gpu["vram_used"] / 1024**3
-                vram_total_gb = gpu["vram_total"] / 1024**3
-                self._gpu_bar.set(gpu_pct)
-                self._gpu_val.configure(
-                    text=f"{gpu['usage']}% | {vram_used_gb:.1f}/{vram_total_gb:.1f} GB | {gpu['temp']}°C"
-                )
-            else:
-                self._gpu_bar.set(0)
-                self._gpu_val.configure(text="GPU bilgisi alınamadı")
-
-            self._net_val.configure(text=f"↓ {self._fmt_bytes(dl)}  ↑ {self._fmt_bytes(ul)}")
-        except Exception:
-            pass
-
-    def _start_update_loop(self):
-        t = threading.Thread(target=self._update, daemon=True)
-        t.start()
 
     def stop(self):
         self._running = False
+
+    def run(self):
+        while self._running:
+            try:
+                cpu  = psutil.cpu_percent(interval=1)
+                ram  = psutil.virtual_memory()
+                gpu  = _get_gpu_stats()
+                net  = psutil.net_io_counters()
+                t    = time.time()
+                dt   = max(t - self._net_last_time, 0.001)
+                dl   = (net.bytes_recv - self._net_last.bytes_recv) / dt
+                ul   = (net.bytes_sent - self._net_last.bytes_sent) / dt
+                self._net_last      = net
+                self._net_last_time = t
+                self.stats_ready.emit(cpu, ram, gpu, dl, ul)
+            except Exception:
+                time.sleep(2)
+
+
+def _fmt_bytes(b: float) -> str:
+    if b < 1024:       return f"{b:.0f} B/s"
+    if b < 1048576:    return f"{b/1024:.1f} KB/s"
+    return f"{b/1048576:.1f} MB/s"
+
+
+class StatsPanel(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self._worker = _StatsWorker()
+        self._worker.stats_ready.connect(self._apply)
+        self._worker.start()
+
+    def _make_row(self, label: str, color: str):
+        row = QWidget()
+        layout = QVBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(1)
+
+        lbl = QLabel(label)
+        lbl.setStyleSheet("color: #8b949e; font-size: 9px; font-weight: bold;")
+        layout.addWidget(lbl)
+
+        val_row = QWidget()
+        val_layout = QHBoxLayout(val_row)
+        val_layout.setContentsMargins(0, 0, 0, 0)
+
+        val = QLabel("—")
+        val.setStyleSheet("color: #f0f6fc; font-size: 15px; font-weight: bold;")
+        val_layout.addWidget(val)
+
+        sub = QLabel("")
+        sub.setStyleSheet("color: #8b949e; font-size: 8px;")
+        sub.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        val_layout.addWidget(sub)
+
+        layout.addWidget(val_row)
+
+        bar = QProgressBar()
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(3)
+        bar.setStyleSheet(f"""
+            QProgressBar {{ background: #21262d; border: none; border-radius: 1px; }}
+            QProgressBar::chunk {{ background: {color}; border-radius: 1px; }}
+        """)
+        layout.addWidget(bar)
+
+        return row, val, sub, bar
+
+    def _build_ui(self):
+        self.setStyleSheet("background: transparent;")
+        main = QVBoxLayout(self)
+        main.setContentsMargins(0, 0, 0, 0)
+        main.setSpacing(6)
+
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(5)
+
+        self._cpu_row, self._cpu_val, self._cpu_sub, self._cpu_bar = self._make_row("CPU",  "#58a6ff")
+        self._ram_row, self._ram_val, self._ram_sub, self._ram_bar = self._make_row("RAM",  "#3fb950")
+        self._gpu_row, self._gpu_val, self._gpu_sub, self._gpu_bar = self._make_row("GPU",  "#f78166")
+        self._vrm_row, self._vrm_val, self._vrm_sub, self._vrm_bar = self._make_row("VRAM", "#d2a8ff")
+
+        for w in (self._cpu_row, self._ram_row, self._gpu_row, self._vrm_row):
+            w.setStyleSheet("background: #161b22; border-radius: 8px;")
+            w.setContentsMargins(8, 6, 8, 6)
+
+        grid.addWidget(self._cpu_row, 0, 0)
+        grid.addWidget(self._ram_row, 0, 1)
+        grid.addWidget(self._gpu_row, 1, 0)
+        grid.addWidget(self._vrm_row, 1, 1)
+        main.addWidget(grid_widget)
+
+        # Network row
+        net_row = QWidget()
+        net_row.setStyleSheet("background: #161b22; border-radius: 6px;")
+        net_layout = QHBoxLayout(net_row)
+        net_layout.setContentsMargins(8, 4, 8, 4)
+
+        net_icon = QLabel("🌐")
+        net_icon.setStyleSheet("font-size: 10px;")
+        net_layout.addWidget(net_icon)
+
+        self._dl_lbl = QLabel("↓ —")
+        self._dl_lbl.setStyleSheet("color: #79c0ff; font-size: 10px;")
+        net_layout.addWidget(self._dl_lbl)
+
+        self._ul_lbl = QLabel("↑ —")
+        self._ul_lbl.setStyleSheet("color: #ff7b72; font-size: 10px;")
+        net_layout.addWidget(self._ul_lbl)
+
+        net_layout.addStretch()
+        main.addWidget(net_row)
+
+    def _apply(self, cpu: float, ram, gpu, dl: float, ul: float):
+        self._cpu_val.setText(f"{cpu:.0f}%")
+        self._cpu_bar.setValue(int(cpu))
+
+        self._ram_val.setText(f"{ram.percent:.0f}%")
+        self._ram_sub.setText(f"{ram.used/1073741824:.1f}/{ram.total/1073741824:.0f}G")
+        self._ram_bar.setValue(int(ram.percent))
+
+        if gpu:
+            self._gpu_val.setText(f"{gpu['usage']:.0f}%")
+            self._gpu_sub.setText(f"{gpu['temp']}°C")
+            self._gpu_bar.setValue(int(gpu['usage']))
+            vram_pct = gpu['vram_used'] / gpu['vram_total'] * 100
+            self._vrm_val.setText(f"{gpu['vram_used']/1073741824:.1f}G")
+            self._vrm_sub.setText(f"/{gpu['vram_total']/1073741824:.0f}G")
+            self._vrm_bar.setValue(int(vram_pct))
+        else:
+            self._gpu_val.setText("—")
+            self._vrm_val.setText("—")
+
+        self._dl_lbl.setText(f"↓ {_fmt_bytes(dl)}")
+        self._ul_lbl.setText(f"↑ {_fmt_bytes(ul)}")
+
+    def stop(self):
+        self._worker.stop()
+        self._worker.quit()

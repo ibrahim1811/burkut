@@ -1,59 +1,61 @@
-import customtkinter as ctk
-import queue
+"""
+Ses asistanı durumu göstergesi.
+"""
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtGui import QFont
 
 
-class VoiceIndicator(ctk.CTkFrame):
-    def __init__(self, parent, **kwargs):
-        super().__init__(parent, **kwargs)
-        self.configure(fg_color="transparent")
-        self._queue: queue.Queue = queue.Queue()
-        self._build_ui()
-        self._poll()
+class VoiceIndicator(QWidget):
+    _state_signal = Signal(str, str)
 
-    def _build_ui(self):
-        self._status = ctk.CTkLabel(
-            self,
-            text="🎙️ Ctrl+Space → Konuş",
-            font=ctk.CTkFont(size=11),
-            text_color="gray",
-            anchor="center",
-        )
-        self._status.pack(fill="x", padx=8, pady=4)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_ui()
+        self._state_signal.connect(self._apply_state)
 
-        self._transcript = ctk.CTkLabel(
-            self,
-            text="",
-            font=ctk.CTkFont(size=10),
-            text_color="#aaaaaa",
-            anchor="center",
-            wraplength=240,
-        )
-        self._transcript.pack(fill="x", padx=8, pady=(0, 4))
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(2)
 
-    def _poll(self):
-        try:
-            while True:
-                msg = self._queue.get_nowait()
-                action = msg.get("action")
-                if action == "listening":
-                    self._status.configure(text="🔴 Dinliyor...", text_color="#e74c3c")
-                    self._transcript.configure(text="")
-                elif action == "processing":
-                    self._status.configure(text="⚙️ İşleniyor...", text_color="#f39c12")
-                elif action == "transcript":
-                    self._transcript.configure(text=msg.get("text", ""))
-                elif action == "done":
-                    self._status.configure(text="🎙️ Ctrl+Space → Konuş", text_color="gray")
-                elif action == "error":
-                    self._status.configure(text="❌ Hata", text_color="#e74c3c")
-                    self._transcript.configure(text=msg.get("text", ""))
-                    self.after(3000, lambda: (
-                        self._status.configure(text="🎙️ Ctrl+Space → Konuş", text_color="gray"),
-                        self._transcript.configure(text=""),
-                    ))
-        except queue.Empty:
-            pass
-        self.after(100, self._poll)
+        self._status = QLabel("🎙️ Ctrl+Space veya çift alkış → Konuş")
+        self._status.setAlignment(Qt.AlignCenter)
+        self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
+        layout.addWidget(self._status)
+
+        self._transcript = QLabel("")
+        self._transcript.setAlignment(Qt.AlignCenter)
+        self._transcript.setWordWrap(True)
+        self._transcript.setStyleSheet("color: #aaaaaa; font-size: 10px;")
+        layout.addWidget(self._transcript)
+
+    def _apply_state(self, action: str, text: str):
+        if action == "listening":
+            self._status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+            self._status.setText("🔴 Dinliyor...")
+            self._transcript.setText("")
+        elif action == "processing":
+            self._status.setStyleSheet("color: #f39c12; font-size: 11px;")
+            self._status.setText("⚙️ İşleniyor...")
+        elif action == "transcript":
+            self._transcript.setText(text)
+        elif action == "done":
+            self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
+            self._status.setText("🎙️ Ctrl+Space veya çift alkış → Konuş")
+        elif action == "error":
+            self._status.setStyleSheet("color: #e74c3c; font-size: 11px;")
+            self._status.setText("❌ Hata")
+            self._transcript.setText(text)
+            QTimer.singleShot(3000, self._reset)
+        elif action in ("loading", "ready"):
+            self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
+            self._status.setText("🎙️ Ctrl+Space veya çift alkış → Konuş")
+
+    def _reset(self):
+        self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
+        self._status.setText("🎙️ Ctrl+Space veya çift alkış → Konuş")
+        self._transcript.setText("")
 
     def notify(self, action: str, text: str = ""):
-        self._queue.put({"action": action, "text": text})
+        self._state_signal.emit(action, text)
