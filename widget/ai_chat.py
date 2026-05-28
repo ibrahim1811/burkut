@@ -304,8 +304,8 @@ class AIChatWindow(ctk.CTkToplevel):
     # ── Karşılama ─────────────────────────────────────────────────────
 
     def _greet(self):
-        from ai.brain import is_ollama_available, get_available_models
-        if is_ollama_available():
+        from ai.brain import is_groq_available, get_available_models
+        if is_groq_available():
             models = get_available_models()
             model_str = models[0] if models else "yükleniyor..."
             msg = (
@@ -319,10 +319,10 @@ class AIChatWindow(ctk.CTkToplevel):
             )
         else:
             msg = (
-                "⚠️ Ollama çalışmıyor!\n\n"
-                "Bir terminalde şunu çalıştır:\n"
-                "    ollama serve\n\n"
-                "Sonra buradan konuşabilirsin."
+                "⚠️ Groq API anahtarı eksik!\n\n"
+                "`.env` dosyasına şunu ekle:\n"
+                "    GROQ_API_KEY=<anahtarın>\n\n"
+                "Anahtar almak için: https://console.groq.com"
             )
         self._append("Bürküt", "ai_lbl", msg, "ai_msg")
 

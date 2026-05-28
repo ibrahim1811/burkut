@@ -1230,11 +1230,11 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/model")
 
-    from ai.brain import get_available_models, is_ollama_available
+    from ai.brain import get_available_models, is_groq_available
 
-    if not is_ollama_available():
+    if not is_groq_available():
         await update.message.reply_text(
-            "❌ Ollama çalışmıyor. `ollama serve` komutunu çalıştır.",
+            "❌ Groq API anahtarı eksik. `.env` dosyasına `GROQ_API_KEY` ekle.",
             parse_mode="Markdown",
         )
         return

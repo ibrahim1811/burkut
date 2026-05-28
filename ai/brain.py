@@ -1,5 +1,5 @@
 """
-BÜRKÜT AI Beyni — Ollama/codellama entegrasyonu ile akıllı konuşma ve PC kontrolü.
+BÜRKÜT AI Beyni — Groq/llama-3.3-70b-versatile entegrasyonu ile akıllı konuşma ve PC kontrolü.
 """
 
 import io
@@ -11,6 +11,10 @@ import tempfile
 import os
 from typing import Optional, Tuple
 import requests
+import groq
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from utils.logger import get_logger
 from .memory import MemoryManager
@@ -28,10 +32,10 @@ def set_telegram_sender(fn) -> None:
     _telegram_sender = fn
 
 
-OLLAMA_BASE = "http://localhost:11434"
-OLLAMA_CHAT = f"{OLLAMA_BASE}/api/chat"
-OLLAMA_TAGS = f"{OLLAMA_BASE}/api/tags"
-MODEL = "mistral"
+MODEL = "llama-3.3-70b-versatile"
+
+# Groq istemcisi
+_groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
 
 # ── Sistem prompt'u ────────────────────────────────────────────────────────────
 # {datetime} her chat cagrısında anlık tarih/saatle doldurulur
@@ -127,42 +131,43 @@ SEED_MESSAGES = [
 ]
 
 
-# ── Ollama bağlantısı ──────────────────────────────────────────────────────────
+# ── Groq bağlantısı ───────────────────────────────────────────────────────────
 
-def is_ollama_available() -> bool:
-    try:
-        r = requests.get(OLLAMA_TAGS, timeout=3)
-        return r.status_code == 200
-    except Exception:
-        return False
+def is_groq_available() -> bool:
+    """GROQ_API_KEY env değişkeni dolu mu kontrol et."""
+    return bool(os.environ.get("GROQ_API_KEY", "").strip())
 
 
 def get_available_models() -> list:
-    try:
-        r = requests.get(OLLAMA_TAGS, timeout=5)
-        data = r.json()
-        return [m["name"] for m in data.get("models", [])]
-    except Exception:
-        return []
+    return [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-3.1-70b-versatile",
+        "gemma2-9b-it",
+        "mixtral-8x7b-32768",
+    ]
 
 
-def _call_ollama(messages: list, model: str = MODEL, timeout: int = 120) -> Optional[str]:
-    """Senkron Ollama API çağrısı."""
+def _call_groq(messages: list, model: str = MODEL, timeout: int = 120) -> Optional[str]:
+    """Senkron Groq API çağrısı."""
     try:
-        resp = requests.post(
-            OLLAMA_CHAT,
-            json={"model": model, "messages": messages, "stream": False},
+        completion = _groq_client.chat.completions.create(
+            model=model,
+            messages=messages,
             timeout=timeout,
         )
-        resp.raise_for_status()
-        return resp.json().get("message", {}).get("content", "")
-    except requests.exceptions.ConnectionError:
+        return completion.choices[0].message.content
+    except groq.RateLimitError as e:
+        logger.warning(f"Groq rate limit: {e}")
         return None
-    except requests.exceptions.Timeout:
-        logger.warning("Ollama API zaman aşımı")
+    except groq.APIConnectionError as e:
+        logger.warning(f"Groq bağlantı hatası: {e}")
+        return None
+    except groq.APIStatusError as e:
+        logger.error(f"Groq API durum hatası: {e}")
         return None
     except Exception as e:
-        logger.error(f"Ollama API hatası: {e}")
+        logger.error(f"Groq API hatası: {e}")
         return None
 
 
@@ -456,7 +461,7 @@ class BurkutBrain:
         """
         loop = asyncio.get_running_loop()
 
-        # URL-only mesaj → Python ile doğrudan özetle, Ollama'ya gitme
+        # URL-only mesaj → Python ile doğrudan özetle, Groq'a gitme
         if prefetch_urls:
             urls = detect_urls(user_message)
             if urls:
@@ -515,11 +520,7 @@ class BurkutBrain:
         now_str = _dt.now().strftime("%d %B %Y, %H:%M")
         system_content = SYSTEM_PROMPT.replace("{datetime}", now_str)
 
-        # Mistral system rolünü görmezden geliyor; ilk user/assistant çifti olarak ekle
-        messages = [
-            {"role": "user",      "content": system_content},
-            {"role": "assistant", "content": "Anladim. Burkut olarak hazir."},
-        ]
+        messages = [{"role": "system", "content": system_content}]
         messages.extend(SEED_MESSAGES)
         for m in history:
             messages.append({"role": m["role"], "content": m["content"]})
@@ -532,25 +533,24 @@ class BurkutBrain:
         # Kullanıcı mesajını orijinal haliyle kaydet
         self.memory.add("user", user_message)
 
-        # Ollama çağrısı (bloklamayan)
+        # Groq çağrısı (bloklamayan)
         response = await loop.run_in_executor(
-            None, lambda: _call_ollama(messages, self.model)
+            None, lambda: _call_groq(messages, self.model)
         )
 
         if response is None:
-            models = get_available_models()
-            if not models:
+            if not is_groq_available():
                 fallback = (
-                    "❌ Ollama çalışmıyor!\n\n"
-                    "Lütfen bir terminalde şunu çalıştır:\n"
-                    "`ollama serve`\n\n"
-                    "Sonra modeli yükle:\n"
-                    "`ollama pull mistral`"
+                    "❌ Groq API anahtarı eksik!\n\n"
+                    "`.env` dosyasına şunu ekle:\n"
+                    "`GROQ_API_KEY=<anahtarın>`\n\n"
+                    "Anahtar almak için: https://console.groq.com"
                 )
             else:
+                models = get_available_models()
                 fallback = (
-                    f"❌ `{self.model}` modeli yanıt vermedi.\n\n"
-                    f"Yüklü modeller: {', '.join(models)}\n"
+                    f"❌ Groq API `{self.model}` modelinden yanıt alınamadı.\n\n"
+                    f"Kullanılabilir modeller: {', '.join(models)}\n"
                     f"Model değiştirmek için `/model <isim>` kullan."
                 )
             return fallback, [], []
@@ -604,15 +604,14 @@ class BurkutBrain:
     def set_model(self, model_name: str) -> bool:
         """Modeli değiştir. Başarı durumu döndür."""
         available = get_available_models()
-        # Tam eşleşme veya prefix eşleşme
         match = next(
-            (m for m in available if m == model_name or m.startswith(model_name + ":")),
+            (m for m in available if m == model_name),
             None,
         )
         if match:
             self.model = match
             return True
-        # Yine de dene (model yoksa Ollama hata verir, biz loglarız)
+        # Bilinmeyen model — yine de dene
         self.model = model_name
         return False
 
