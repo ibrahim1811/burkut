@@ -35,7 +35,7 @@ def set_telegram_sender(fn) -> None:
 MODEL = "llama-3.3-70b-versatile"
 
 # Groq istemcisi
-_groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY", ""))
+_groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY") or None)
 
 # ── Sistem prompt'u ────────────────────────────────────────────────────────────
 # {datetime} her chat cagrısında anlık tarih/saatle doldurulur
@@ -162,6 +162,9 @@ def _call_groq(messages: list, model: str = MODEL, timeout: int = 120) -> Option
         return None
     except groq.APIConnectionError as e:
         logger.warning(f"Groq bağlantı hatası: {e}")
+        return None
+    except groq.AuthenticationError as e:
+        logger.error(f"Groq kimlik doğrulama hatası (API anahtarı geçersiz?): {e}")
         return None
     except groq.APIStatusError as e:
         logger.error(f"Groq API durum hatası: {e}")
