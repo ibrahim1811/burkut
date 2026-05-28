@@ -247,15 +247,20 @@ def start(indicator=None):
     text_to_speech.start()
     text_to_speech.wait_ready()
 
-    # Whisper modelini arka planda yükle — yüklenince "ready" bildir
+    # STT modelini/API'yi hazırla — hazır olunca "ready" bildir
     _notify("loading")
 
     def _on_model_ready():
         _notify("ready")
-        text_to_speech.speak("Ses asistanı hazır. Kontrol artı boşluk ile aktif edin.")
+        text_to_speech.speak("Ses asistanı hazır. Kontrol artı boşluk veya çift alkış ile aktif edin.")
         print("[SES] Ses asistanı hazır.")
 
     speech_recognizer.preload(on_complete=_on_model_ready)
 
     listener = HotkeyListener(on_start=_on_start, on_stop=_on_stop)
     listener.start()
+
+    from voice.wake_clap import WakeGestureListener
+    wake_listener = WakeGestureListener(on_wake=_on_start)
+    wake_listener.start()
+    print("[SES] Çift alkış dinleyicisi başlatıldı.")
