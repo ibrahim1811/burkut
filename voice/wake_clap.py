@@ -1,29 +1,20 @@
 """
-Çift alkış tetikleyici.
+Çift alkış tetikleyici — sounddevice kullanır (AudioRecorder ile çatışmaz).
 2 saniye içinde 2 alkış → on_wake() çağırır.
 """
 
-import math
-import struct
 import threading
 import time
 from typing import Callable
 
-import pyaudio
+import numpy as np
+import sounddevice as sd
 
 SAMPLE_RATE    = 16000
-CHUNK          = 1024       # ~64 ms/kare
-CLAP_THRESHOLD = 1800       # Int16 RMS eşiği
-CLAP_MIN_GAP   = 0.12       # Aynı alkışın çerçevelere yayılmasını önler
-CLAP_WINDOW    = 2.0        # İki alkış bu kadar saniye içinde olmalı
-
-
-def _rms(data: bytes) -> float:
-    count = len(data) // 2
-    if count == 0:
-        return 0.0
-    shorts = struct.unpack(f"{count}h", data)
-    return math.sqrt(sum(s * s for s in shorts) / count)
+BLOCK_SIZE     = 1024        # ~64 ms/kare
+CLAP_THRESHOLD = 0.12        # float32 RMS eşiği — düşürürsen hassaslaşır
+CLAP_MIN_GAP   = 0.12        # Aynı alkışın çerçevelere yayılmasını önler (sn)
+CLAP_WINDOW    = 2.0         # İki alkış bu kadar saniye içinde olmalı
 
 
 class WakeGestureListener:
@@ -39,34 +30,44 @@ class WakeGestureListener:
         self._running.clear()
 
     def _loop(self):
-        pa     = pyaudio.PyAudio()
-        stream = pa.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=SAMPLE_RATE,
-            input=True,
-            frames_per_buffer=CHUNK,
-        )
         clap_times: list[float] = []
+
+        def _callback(indata, frames, time_info, status):
+            if not self._running.is_set():
+                return
+
+            rms = float(np.sqrt(np.mean(indata ** 2)))
+            now = time.monotonic()
+
+            # Pencere dışı eski alkışları temizle
+            while clap_times and now - clap_times[0] > CLAP_WINDOW:
+                clap_times.pop(0)
+
+            if rms > CLAP_THRESHOLD:
+                if not clap_times or (now - clap_times[-1]) > CLAP_MIN_GAP:
+                    clap_times.append(now)
+                    print(f"[Wake] 👏 Alkış #{len(clap_times)}")
+
+                    if len(clap_times) >= 2:
+                        clap_times.clear()
+                        print("[Wake] ✅ Çift alkış — tetiklendi")
+                        # Callback thread'inden on_wake'i ayrı thread'de çağır
+                        threading.Thread(target=self._on_wake, daemon=True).start()
+
+        from voice.shared_state import get_mic_device
+        device = get_mic_device()
+
         try:
-            while self._running.is_set():
-                data = stream.read(CHUNK, exception_on_overflow=False)
-                rms  = _rms(data)
-                now  = time.monotonic()
-
-                # Pencere dışı eski alkışları temizle
-                clap_times = [t for t in clap_times if now - t < CLAP_WINDOW]
-
-                if rms > CLAP_THRESHOLD:
-                    if not clap_times or (now - clap_times[-1]) > CLAP_MIN_GAP:
-                        clap_times.append(now)
-                        print(f"[Wake] 👏 Alkış #{len(clap_times)}")
-
-                        if len(clap_times) >= 2:
-                            clap_times = []
-                            print("[Wake] ✅ Çift alkış — ekrana geçiliyor")
-                            self._on_wake()
-        finally:
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
+            with sd.InputStream(
+                device=device,
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+                blocksize=BLOCK_SIZE,
+                callback=_callback,
+            ):
+                print("[Wake] Çift alkış dinleyicisi başladı.")
+                while self._running.is_set():
+                    time.sleep(0.1)
+        except Exception as e:
+            print(f"[Wake] Hata: {e}")

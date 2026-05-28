@@ -5,6 +5,7 @@ import asyncio
 import threading
 import uuid
 import re
+import html as _html
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextBrowser,
     QTextEdit, QPushButton, QLabel, QSizePolicy, QScrollBar
 )
-from PySide6.QtCore import Qt, Signal, QObject, QTimer, QSize
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QSize, QEvent
 from PySide6.QtGui import QFont, QKeyEvent, QTextCursor
 
 
@@ -29,14 +30,15 @@ C_AI     = "#3fb950"
 
 
 def _to_html(text: str) -> str:
-    """Metni HTML'e çevir. Kod bloklarını <pre> ile sar."""
+    """Metni HTML'e çevir. Kod bloklarını <pre> ile sar. Tüm metin HTML-escape edilir."""
     parts = []
     last = 0
     for m in re.finditer(r"```(?:\w+)?\n?(.*?)```", text, re.DOTALL):
         before = text[last:m.start()].strip()
         if before:
-            parts.append(f"<p style='margin:2px 0; white-space:pre-wrap;'>{before}</p>")
-        code = m.group(1).rstrip()
+            esc = _html.escape(before)
+            parts.append(f"<p style='margin:2px 0; white-space:pre-wrap;'>{esc}</p>")
+        code = _html.escape(m.group(1).rstrip())
         parts.append(
             f"<pre style='background:#1a1d27;border-radius:4px;padding:8px;"
             f"font-family:Consolas,monospace;font-size:10px;"
@@ -45,12 +47,15 @@ def _to_html(text: str) -> str:
         last = m.end()
     tail = text[last:].strip()
     if tail:
-        parts.append(f"<p style='margin:2px 0; white-space:pre-wrap;'>{tail}</p>")
-    return "".join(parts) or f"<p>{text}</p>"
+        esc = _html.escape(tail)
+        parts.append(f"<p style='margin:2px 0; white-space:pre-wrap;'>{esc}</p>")
+    return "".join(parts) or f"<p>{_html.escape(text)}</p>"
 
 
 class _Signals(QObject):
-    message_ready = Signal(str, str, str)   # role, text, color
+    message_ready  = Signal(str, str, str)  # role, text, color
+    thinking_done  = Signal()               # ana thread'de placeholder kaldır
+    images_ready   = Signal(list)           # list of bytes — görseller
 
 
 class AIChatWindow(QWidget):
@@ -58,21 +63,27 @@ class AIChatWindow(QWidget):
 
     @classmethod
     def get_or_create(cls, parent=None):
-        if cls._instance is None or not cls._instance.isVisible():
-            if cls._instance is not None:
-                cls._instance.show()
-                cls._instance.raise_()
-                cls._instance.activateWindow()
-            else:
-                cls._instance = cls()
-                cls._instance.show()
+        # Silinmiş C++ nesnesine karşı koruma
+        if cls._instance is not None:
+            try:
+                visible = cls._instance.isVisible()
+            except RuntimeError:
+                cls._instance = None
+
+        if cls._instance is None:
+            cls._instance = cls()
+            cls._instance.show()
+        elif not cls._instance.isVisible():
+            cls._instance.show()
+            cls._instance.raise_()
+            cls._instance.activateWindow()
         else:
             cls._instance.raise_()
             cls._instance.activateWindow()
         return cls._instance
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.Window | Qt.FramelessWindowHint)
+        super().__init__(parent, Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowTitle("Bürküt AI")
         self.resize(500, 640)
@@ -82,6 +93,8 @@ class AIChatWindow(QWidget):
         self._thinking   = False
         self._signals    = _Signals()
         self._signals.message_ready.connect(self._append_message)
+        self._signals.thinking_done.connect(self._on_thinking_done)
+        self._signals.images_ready.connect(self._on_images_ready)
         self._drag_pos   = None
 
         self._build_ui()
@@ -92,7 +105,6 @@ class AIChatWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # Container with border
         container = QWidget()
         container.setObjectName("container")
         container.setStyleSheet(f"""
@@ -185,9 +197,9 @@ class AIChatWindow(QWidget):
         self._input.installEventFilter(self)
         inp_layout.addWidget(self._input, 1)
 
-        send_btn = QPushButton("➤")
-        send_btn.setFixedSize(36, 36)
-        send_btn.setStyleSheet(f"""
+        self._send_btn = QPushButton("➤")
+        self._send_btn.setFixedSize(36, 36)
+        self._send_btn.setStyleSheet(f"""
             QPushButton {{
                 background: #1a3a1a;
                 border: 1px solid #2d4a2d;
@@ -196,14 +208,15 @@ class AIChatWindow(QWidget):
                 font-size: 14px;
             }}
             QPushButton:hover {{ background: #253525; }}
+            QPushButton:disabled {{ background: #1a1a1a; color: #444; border-color: #333; }}
         """)
-        send_btn.clicked.connect(self._send)
-        inp_layout.addWidget(send_btn)
+        self._send_btn.clicked.connect(self._send)
+        inp_layout.addWidget(self._send_btn)
 
         layout.addWidget(input_bar)
 
     def eventFilter(self, obj, event):
-        if obj is self._input and event.type() == event.KeyPress:
+        if obj is self._input and event.type() == QEvent.Type.KeyPress:
             if event.key() == Qt.Key_Return and not (event.modifiers() & Qt.ShiftModifier):
                 self._send()
                 return True
@@ -231,9 +244,6 @@ class AIChatWindow(QWidget):
         self._append_message("ai", msg, C_AI)
 
     def _append_message(self, role: str, text: str, color: str):
-        cursor = self._chat.textCursor()
-        cursor.movePosition(QTextCursor.End)
-
         if role == "user":
             prefix = f"<div style='margin:6px 0;'><span style='color:{C_USER};font-weight:bold;font-size:11px;'>Sen</span><br>"
         else:
@@ -243,7 +253,33 @@ class AIChatWindow(QWidget):
         html = prefix + f"<span style='color:{color};'>{body}</span></div>"
         self._chat.append(html)
 
-        # Scroll to bottom
+        sb = self._chat.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _on_thinking_done(self):
+        # Ana thread'de çalışır — thinking placeholder'ı kaldır, butonu etkinleştir
+        html = self._chat.toHtml()
+        html = html.replace("⌛ Düşünüyor...", "")
+        self._chat.setHtml(html)
+        sb = self._chat.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        self._send_btn.setEnabled(True)
+        self._thinking = False
+
+    def _on_images_ready(self, images: list):
+        # Ana thread'de görselleri chat'e ekle
+        import base64
+        for img_bytes in images:
+            try:
+                b64 = base64.b64encode(img_bytes).decode()
+                self._chat.append(
+                    f"<div style='margin:4px 0;'>"
+                    f"<img src='data:image/jpeg;base64,{b64}' "
+                    f"style='max-width:100%;border-radius:4px;'/>"
+                    f"</div>"
+                )
+            except Exception:
+                self._chat.append("<p style='color:#8b949e;'>[📸 Görsel yüklenemedi]</p>")
         sb = self._chat.verticalScrollBar()
         sb.setValue(sb.maximum())
 
@@ -254,33 +290,37 @@ class AIChatWindow(QWidget):
         self._input.clear()
         self._append_message("user", text, C_USER)
         self._thinking = True
+        self._send_btn.setEnabled(False)
         self._append_message("ai", "⌛ Düşünüyor...", T2)
         threading.Thread(target=self._run_ai, args=(text,), daemon=True).start()
 
     def _run_ai(self, text: str):
+        # Arka plan thread — Qt widget'larına DOĞRUDAN dokunmaz, sadece signal emit eder
+        loop = asyncio.new_event_loop()
         try:
             from ai.brain import BurkutBrain
             brain = BurkutBrain(self._session_id)
-            loop  = asyncio.new_event_loop()
-            clean, actions, _ = loop.run_until_complete(
+            clean, actions, images = loop.run_until_complete(
                 brain.chat(text, chat_id=0)
             )
-            loop.close()
-
-            # Remove "thinking" placeholder
-            html = self._chat.toHtml()
-            html = html.replace("⌛ Düşünüyor...", "")
-            self._chat.setHtml(html)
-
+            self._signals.thinking_done.emit()
             self._signals.message_ready.emit("ai", clean, C_AI)
             for act in actions:
                 self._signals.message_ready.emit("action", act, "#d2a8ff")
+            if images:
+                self._signals.images_ready.emit(images)
         except Exception as e:
+            self._signals.thinking_done.emit()
             self._signals.message_ready.emit("ai", f"❌ Hata: {e}", "#ff7b72")
         finally:
-            self._thinking = False
+            loop.close()
 
     def _clear_chat(self):
+        try:
+            from ai.memory import clear_session
+            clear_session(self._session_id)
+        except Exception:
+            pass
         self._chat.clear()
         self._session_id = str(uuid.uuid4())
         self._greet()

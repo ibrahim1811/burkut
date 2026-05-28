@@ -10,9 +10,11 @@ from voice import speech_recognizer, text_to_speech, shared_state
 from voice.command_parser import parse
 
 
-_recorder = AudioRecorder()
-_busy = threading.Lock()
-_wake_listener = None
+_recorder           = AudioRecorder()
+_busy               = threading.Lock()
+_wake_listener      = None
+_wake_word_listener = None
+_hotkey             = None   # HotkeyListener referansı — VAD reset için
 
 
 def set_indicator(indicator):
@@ -38,12 +40,20 @@ def _on_start():
         return
     try:
         _notify("listening")
-        print("[SES] Kayıt başladı...")
-        _recorder.start()
+        print("[SES] Kayıt başladı (VAD aktif)...")
+        # on_auto_stop: sessizlik tespiti → listener sıfırla → _on_stop çağır
+        _recorder.start(on_auto_stop=_on_vad_stop)
     except Exception as e:
         print(f"[SES] Kayıt başlatma hatası: {e}")
         _notify("error", str(e))
         _busy.release()
+
+
+def _on_vad_stop():
+    """VAD sessizlik tespiti sonrası çağrılır — listener durumunu sıfırla."""
+    if _hotkey:
+        _hotkey.reset_recording()
+    _on_stop()
 
 
 def _on_stop():
@@ -258,8 +268,17 @@ def start(indicator=None):
 
     speech_recognizer.preload(on_complete=_on_model_ready)
 
-    listener = HotkeyListener(on_start=_on_start, on_stop=_on_stop)
-    listener.start()
+    global _hotkey, _wake_word_listener
+    _hotkey = HotkeyListener(on_start=_on_start, on_stop=_on_stop)
+    _hotkey.start()
+
+    # 'Bürküt' kelime tetikleyicisi
+    from voice.wake_word import WakeWordListener
+    _wake_word_listener = WakeWordListener(
+        on_wake=_on_start,
+        is_busy_fn=lambda: _busy.locked(),
+    )
+    _wake_word_listener.start()
 
     global _wake_listener
     from voice.wake_clap import WakeGestureListener

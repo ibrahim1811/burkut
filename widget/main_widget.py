@@ -52,13 +52,12 @@ class BurkutWidget(QWidget):
         super().__init__()
         cfg = load_widget_config()
 
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Tool)
+        # Qt.Tool yerine WindowStaysOnTopHint — Tool Windows'ta ilk tıklamayı yutabiliyor
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setWindowTitle("BÜRKÜT")
 
-        self._always_on_top = cfg.get("always_on_top", False)
-        if self._always_on_top:
-            self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self._always_on_top = True  # her zaman üstte, tıklama sorunu yaşanmaz
 
         self._W = cfg.get("width", 280)
         self._drag_pos = None
@@ -266,8 +265,10 @@ class BurkutWidget(QWidget):
 
     def _toggle_topmost(self):
         self._always_on_top = not self._always_on_top
+        was_visible = self.isVisible()
         self.setWindowFlag(Qt.WindowStaysOnTopHint, self._always_on_top)
-        self.show()
+        if was_visible:
+            self.show()
         try:
             cfg = load_widget_config()
             cfg["always_on_top"] = self._always_on_top
@@ -334,7 +335,19 @@ class BurkutWidget(QWidget):
 
 
 def start_widget():
+    # QApplication bu thread'de yaşar; app.exec() event loop'u başlatır (bloklayıcı)
     app = QApplication.instance() or QApplication(sys.argv)
     widget = BurkutWidget()
     widget.show()
-    return widget, app
+
+    # Ses asistanını widget'ın voice indicator'ı ile başlat
+    def _launch_voice():
+        try:
+            from voice.voice_assistant import start as voice_start
+            voice_start(indicator=widget.get_voice_indicator())
+        except Exception as e:
+            print(f"[Widget] Voice assistant başlatılamadı: {e}")
+
+    threading.Thread(target=_launch_voice, daemon=True).start()
+
+    app.exec()

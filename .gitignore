@@ -1,11 +1,33 @@
+# Gizli veriler
 .env
 config.json
-logs/
+memory.json
+
+# Önbellek
 __pycache__/
 *.pyc
 *.pyo
-.venv/
+*.pyd
+.pytest_cache/
+
+# Offline kuyruk ve kullanıcı verisi
+data/
+
+# Log dosyaları
+logs/
+*.log
+
+# Ses/görüntü geçici dosyalar
+*.wav
+*.mp3
+*.ogg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Python sanal ortam
 venv/
-*.egg-info/
-dist/
-build/
+.venv/
+env/

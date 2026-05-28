@@ -8,6 +8,7 @@ import sys
 import asyncio
 import signal
 import threading
+import time
 from pathlib import Path
 
 # Proje kök dizinini Python path'ine ekle
@@ -28,7 +29,8 @@ _MSG_LIMIT = 4000
 from utils.config_manager import load_config, get_config
 from utils.logger import setup_logger, get_logger
 from bot import handlers, callbacks
-from bot.messages import BOT_STARTED, BOT_STOPPED
+from bot.messages import BOT_STARTED
+
 
 logger = setup_logger()
 
@@ -156,7 +158,6 @@ async def post_init(app: Application) -> None:
     # Başlangıç kamera fotoğrafı
     if cfg.get("startup_webcam_photo", True) and owner_ids:
         try:
-            import asyncio
             from core.media_manager import take_webcam_photo
             from core.offline_queue import is_online, enqueue_photo
             loop = asyncio.get_running_loop()
@@ -220,29 +221,110 @@ async def post_init(app: Application) -> None:
 
 
 async def post_shutdown(app: Application) -> None:
-    """Bot kapanırken owner'a bildirim gönder."""
-    cfg = get_config()
-    owner_ids = cfg.get("authorized_users", [])
-    for uid in owner_ids:
-        try:
-            await app.bot.send_message(chat_id=uid, text=BOT_STOPPED)
-        except Exception:
-            pass
     logger.info("BÜRKÜT kapatılıyor.")
 
 
 def _start_widget_and_voice():
-    """Widget'ı başlatır."""
+    """Widget ve ses asistanını başlatır — sadece local ortamda (PORT env yok)."""
+    if _os.environ.get("PORT"):
+        # Render/cloud ortamı — widget/ses local/pc_agent.py tarafından başlatılır
+        return
     try:
         from widget.main_widget import start_widget
-        widget_thread = threading.Thread(
-            target=start_widget,
-            daemon=True,
-        )
+        widget_thread = threading.Thread(target=start_widget, daemon=True)
         widget_thread.start()
         logger.info("Masaüstü widget thread'i başlatıldı.")
     except Exception as e:
         logger.warning(f"Widget başlatılamadı: {e}")
+
+
+
+# ── Local PC agent relay ──────────────────────────────────────────────────────
+import os as _os
+import queue as _queue
+import uuid as _uuid
+
+_AGENT_TOKEN       = _os.environ.get("AGENT_TOKEN", "")
+_agent_cmd_queue:  _queue.Queue = _queue.Queue()   # Render → agent
+_agent_results:    dict         = {}                # cmd_id → result dict
+_agent_results_lock             = threading.Lock()
+_agent_last_seen:  float        = 0.0              # son poll zamanı
+
+
+def agent_is_online() -> bool:
+    """Son 10 saniye içinde poll geldiyse agent bağlı sayılır."""
+    return (time.time() - _agent_last_seen) < 10
+
+
+async def send_to_agent(action: str, params: dict, timeout: float = 12.0):
+    """
+    Komutu agent kuyruğuna ekle, sonucu bekle.
+    Agent çevrimdışıysa None döner.
+    """
+    if not agent_is_online():
+        return None
+    cmd_id = str(_uuid.uuid4())
+    _agent_cmd_queue.put({"id": cmd_id, "action": action, "params": params})
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.4)
+        with _agent_results_lock:
+            if cmd_id in _agent_results:
+                return _agent_results.pop(cmd_id)
+    return None
+
+
+def _start_health_server() -> None:
+    """UptimeRobot health + local PC agent relay — sadece PORT env var varsa başlar."""
+    port_str = _os.environ.get("PORT", "")
+    if not port_str:
+        return
+    try:
+        import time as _time
+        from flask import Flask, request, jsonify
+        health_app = Flask(__name__)
+
+        @health_app.route("/health")
+        def health():
+            status = "online" if agent_is_online() else "offline"
+            return jsonify({"status": "ok", "agent": status}), 200
+
+        @health_app.route("/")
+        def index():
+            return "🦅 BÜRKÜT aktif", 200
+
+        @health_app.route("/agent/poll")
+        def agent_poll():
+            global _agent_last_seen
+            token = request.headers.get("X-Agent-Token", "")
+            if _AGENT_TOKEN and token != _AGENT_TOKEN:
+                return "Unauthorized", 401
+            _agent_last_seen = _time.time()
+            try:
+                cmd = _agent_cmd_queue.get_nowait()
+                return jsonify(cmd)
+            except _queue.Empty:
+                return jsonify({"type": "idle"})
+
+        @health_app.route("/agent/result", methods=["POST"])
+        def agent_result():
+            token = request.headers.get("X-Agent-Token", "")
+            if _AGENT_TOKEN and token != _AGENT_TOKEN:
+                return "Unauthorized", 401
+            data = request.get_json(force=True)
+            with _agent_results_lock:
+                _agent_results[data["id"]] = data
+            return "OK", 200
+
+        port = int(port_str)
+        t = threading.Thread(
+            target=lambda: health_app.run(host="0.0.0.0", port=port, use_reloader=False),
+            daemon=True,
+        )
+        t.start()
+        logger.info(f"Health+Agent server port {port}'de başladı.")
+    except Exception as e:
+        logger.warning(f"Health server başlatılamadı: {e}")
 
 
 def _start_offline_queue_watcher(app: Application) -> None:
@@ -304,6 +386,9 @@ def main() -> None:
     )
 
     register_handlers(app)
+
+    # UptimeRobot health endpoint (Render'da PORT env var varsa aktif olur)
+    _start_health_server()
 
     logger.info("Polling başlatılıyor...")
     app.run_polling(

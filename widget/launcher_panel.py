@@ -28,26 +28,15 @@ EMOJIS = [
     "🚀","⭐","🔥","💎","✨","🌟","⚡","🌈",
 ]
 
-BTN_STYLE = """
-    QPushButton {{
-        background: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 10px;
-        color: #f0f6fc;
-        font-size: {icon_sz}px;
-    }}
-    QPushButton:hover {{ background: #1f2937; border-color: #e2b96a; }}
-"""
-
 ADD_STYLE = """
     QPushButton {
         background: #161b22;
         border: 1px solid #30363d;
         border-radius: 10px;
         color: #8b949e;
-        font-size: 20px;
+        font-size: 22px;
     }
-    QPushButton:hover { background: #1f2937; }
+    QPushButton:hover { background: #1f2937; border-color: #e2b96a; }
 """
 
 
@@ -185,9 +174,12 @@ class LauncherPanel(QWidget):
         return max(52, min(115, bs))
 
     def _refresh(self):
-        # Clear all children of _inner
-        for child in self._inner.findChildren(QWidget):
-            child.setParent(None)
+        # _inner'ı tamamen yeni bir widget ile değiştir — eski layout'u sıfırlar
+        outer_layout = self.layout()
+        outer_layout.removeWidget(self._inner)
+        self._inner.deleteLater()
+        self._inner = QWidget()
+        outer_layout.addWidget(self._inner)
 
         bs = self._btn_size()
         icon_sz = max(18, min(40, int(bs * 0.38)))
@@ -206,33 +198,58 @@ class LauncherPanel(QWidget):
                 btn.setFixedSize(bs, bs)
                 btn.setStyleSheet(ADD_STYLE)
                 btn.clicked.connect(self._add_item)
+                grid.addWidget(btn, row, col)
             else:
-                text = f"{item['icon']}\n{item['label']}"
-                btn = QPushButton(text)
-                btn.setFixedSize(bs, bs)
-                btn.setStyleSheet(BTN_STYLE.format(icon_sz=icon_sz))
-                btn.setContextMenuPolicy(Qt.CustomContextMenu)
-                btn.customContextMenuRequested.connect(
-                    lambda pos, i=item, b=btn: self._ctx_menu(pos, i, b)
-                )
-                btn.clicked.connect(lambda _, i=item: _open_item(i))
-            grid.addWidget(btn, row, col)
+                grid.addWidget(self._make_btn(item, bs, icon_sz), row, col)
 
         if self._on_change:
             QTimer.singleShot(60, self._on_change)
 
-    def _add_item(self):
-        dlg = _AddDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg._result:
-            add_launcher(dlg._result)
-            self._refresh()
+    def _make_btn(self, item: dict, bs: int, icon_sz: int) -> QWidget:
+        """İkon büyük üstte, isim küçük altta — temiz kart butonu."""
+        card = QWidget()
+        card.setFixedSize(bs, bs)
+        card.setStyleSheet("""
+            QWidget {
+                background: #161b22;
+                border: 1px solid #30363d;
+                border-radius: 10px;
+            }
+            QWidget:hover {
+                background: #1f2937;
+                border-color: #e2b96a;
+            }
+        """)
+        card.setCursor(Qt.PointingHandCursor)
 
-    def _ctx_menu(self, pos, item: dict, btn: QPushButton):
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(2, 4, 2, 4)
+        layout.setSpacing(0)
+
+        icon_lbl = QLabel(item.get("icon", "📄"))
+        icon_lbl.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+        icon_lbl.setStyleSheet(f"font-size: {icon_sz}px; background: transparent; border: none;")
+        layout.addWidget(icon_lbl, 3)
+
+        name = item.get("label", "")[:8]
+        name_lbl = QLabel(name)
+        name_lbl.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        name_lbl.setStyleSheet("font-size: 8px; color: #8b949e; background: transparent; border: none;")
+        layout.addWidget(name_lbl, 1)
+
+        # Tıklama ve sağ tık
+        card.mousePressEvent = lambda e, i=item: (
+            self._ctx_menu_card(e, i, card) if e.button() == Qt.RightButton
+            else _open_item(i) if e.button() == Qt.LeftButton else None
+        )
+        return card
+
+    def _ctx_menu_card(self, event, item: dict, card: QWidget):
         menu = QMenu(self)
         menu.setStyleSheet("background: #161b22; color: #f0f6fc; border: 1px solid #30363d;")
         edit_act   = menu.addAction("✏️ Düzenle")
         remove_act = menu.addAction("🗑️ Kaldır")
-        action = menu.exec(btn.mapToGlobal(pos))
+        action = menu.exec(event.globalPosition().toPoint())
         if action == edit_act:
             dlg = _AddDialog(self, existing=item)
             if dlg.exec() == QDialog.Accepted and dlg._result:
@@ -248,3 +265,10 @@ class LauncherPanel(QWidget):
                          if not (l["label"] == item["label"] and l["path"] == item["path"])]
             save_launchers(launchers)
             self._refresh()
+
+    def _add_item(self):
+        dlg = _AddDialog(self)
+        if dlg.exec() == QDialog.Accepted and dlg._result:
+            add_launcher(dlg._result)
+            self._refresh()
+

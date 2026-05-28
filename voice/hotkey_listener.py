@@ -1,33 +1,39 @@
 import threading
-import time
 from typing import Callable
 from pynput import keyboard
 
 
 class HotkeyListener:
-    """Ctrl+Space push-to-talk. Basılı tut = kayıt, bırak = işle."""
+    """Ctrl+Space tek dokunuş — bas başla, VAD otomatik durdurur.
+    Kayıt sırasında tekrar Ctrl+Space basarsan zorla durdurur."""
 
     def __init__(self, on_start: Callable, on_stop: Callable):
-        self._on_start = on_start
-        self._on_stop = on_stop
+        self._on_start  = on_start
+        self._on_stop   = on_stop
         self._ctrl_held = False
-        self._space_held = False
         self._recording = False
-        self._stop_lock = threading.Lock()
+        self._lock      = threading.Lock()
+
+    def reset_recording(self):
+        """VAD auto-stop sonrası çağrılır — listener durumunu sıfırla."""
+        with self._lock:
+            self._recording = False
 
     def _on_press(self, key):
         try:
             if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
                 self._ctrl_held = True
-            elif key == keyboard.Key.space:
-                self._space_held = True
+                return
 
-            if self._ctrl_held and self._space_held and not self._recording:
-                with self._stop_lock:
+            if key == keyboard.Key.space and self._ctrl_held:
+                with self._lock:
                     if not self._recording:
                         self._recording = True
-                        t = threading.Thread(target=self._on_start, daemon=True)
-                        t.start()
+                        threading.Thread(target=self._on_start, daemon=True).start()
+                    else:
+                        # Kayıt sırasında tekrar basış → zorla durdur
+                        self._recording = False
+                        threading.Thread(target=self._on_stop, daemon=True).start()
         except Exception as e:
             print(f"[Hotkey] press hata: {e}")
 
@@ -35,21 +41,11 @@ class HotkeyListener:
         try:
             if key in (keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
                 self._ctrl_held = False
-            elif key == keyboard.Key.space:
-                self._space_held = False
-
-            # İkisinden biri bırakıldıysa ve kayıt devam ediyorsa durdur
-            if self._recording and not (self._ctrl_held and self._space_held):
-                with self._stop_lock:
-                    if self._recording:
-                        self._recording = False
-                        t = threading.Thread(target=self._on_stop, daemon=True)
-                        t.start()
-        except Exception as e:
-            print(f"[Hotkey] release hata: {e}")
+        except Exception:
+            pass
 
     def start(self):
-        print("[Hotkey] Dinleniyor — Ctrl+Space basılı tut, konuş, bırak.")
+        print("[Hotkey] Dinleniyor — Ctrl+Space: başla (VAD otomatik durdurur).")
         with keyboard.Listener(
             on_press=self._on_press,
             on_release=self._on_release,

@@ -1,35 +1,38 @@
+# Temel (tüm platformlar)
 python-telegram-bot==20.7
 psutil==5.9.8
 Pillow==10.2.0
 schedule==1.2.1
 python-dotenv==1.0.0
-pywin32==306
 aiofiles==23.2.1
 aiohttp==3.9.3
-mss==9.0.1
 requests==2.31.0
-opencv-python==4.9.0.80
-sounddevice==0.4.6
-scipy==1.13.0
+flask>=3.0.0
 
-# Ses Asistanı
-edge-tts>=6.1.9
-soundfile>=0.12.1
-pynput>=1.7.6
-pyaudio>=0.2.14
-
-# PC Kontrol
-pyautogui>=0.9.54
-pycaw>=20240213
-screen-brightness-control>=0.23.0
-pygetwindow>=0.0.9
-pyperclip>=1.8.2
-
-# Masaüstü Widget
-PySide6>=6.6.0
-pynvml>=11.5.0
-
-# AI / Bürküt Asistan
+# AI / Bürküt Asistan (tüm platformlar)
 groq>=0.9.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+
+# Windows — PC kontrolü (Linux/Render'da yüklenmez)
+pywin32==306; sys_platform == "win32"
+mss==9.0.1; sys_platform == "win32"
+opencv-python==4.9.0.80; sys_platform == "win32"
+pycaw>=20240213; sys_platform == "win32"
+screen-brightness-control>=0.23.0; sys_platform == "win32"
+pygetwindow>=0.0.9; sys_platform == "win32"
+pyautogui>=0.9.54; sys_platform == "win32"
+pyperclip>=1.8.2; sys_platform == "win32"
+pynvml>=11.5.0; sys_platform == "win32"
+
+# Windows — Masaüstü Widget
+PySide6>=6.6.0; sys_platform == "win32"
+
+# Windows — Ses Asistanı
+sounddevice==0.4.6; sys_platform == "win32"
+scipy==1.13.0; sys_platform == "win32"
+soundfile>=0.12.1; sys_platform == "win32"
+pynput>=1.7.6; sys_platform == "win32"
+pyaudio>=0.2.14; sys_platform == "win32"
+edge-tts>=6.1.9; sys_platform == "win32"
+vosk>=0.3.45; sys_platform == "win32"

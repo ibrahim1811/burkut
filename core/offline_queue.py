@@ -225,21 +225,7 @@ async def start_queue_watcher(bot) -> None:
 
             if now_online and not was_online:
                 logger.info("İnternet bağlantısı yeniden sağlandı — kuyruk işleniyor...")
-                count = await process_queue(bot)
-
-                from utils.config_manager import get_config
-                cfg = get_config()
-                for uid in cfg.get("authorized_users", []):
-                    try:
-                        msg = (
-                            f"✅ İnternet bağlantısı sağlandı.\n"
-                            f"📬 {count} bekleyen öğe gönderildi."
-                            if count else
-                            "✅ İnternet bağlantısı yeniden sağlandı."
-                        )
-                        await bot.send_message(chat_id=uid, text=msg)
-                    except Exception:
-                        pass
+                await process_queue(bot)
 
             elif now_online and queue_size() > 0:
                 # İnternet var, kuyruğa bir şeyler kalmış (önceki deneme başarısız olmuş)

@@ -49,7 +49,9 @@ class _StatsWorker(QThread):
                 self._net_last_time = t
                 self.stats_ready.emit(cpu, ram, gpu, dl, ul)
             except Exception:
-                time.sleep(2)
+                # _running kontrol edilerek gereksiz bekleme önlenir
+                if self._running:
+                    time.sleep(2)
 
 
 def _fmt_bytes(b: float) -> str:
@@ -176,4 +178,6 @@ class StatsPanel(QWidget):
 
     def stop(self):
         self._worker.stop()
-        self._worker.quit()
+        # quit() bu worker için no-op (run() Qt event loop kullanmıyor)
+        # wait() ile thread'in doğal olarak bitmesini bekle (max 3 sn)
+        self._worker.wait(3000)
