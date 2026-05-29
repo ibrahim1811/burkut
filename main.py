@@ -20,6 +20,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ContextTypes,
     filters,
 )
 
@@ -33,6 +34,15 @@ from bot.messages import BOT_STARTED
 
 
 logger = setup_logger()
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from telegram.error import Conflict
+    if isinstance(context.error, Conflict):
+        logger.critical("Telegram Conflict: Başka bir bot instance çalışıyor. Bu instance durduruluyor.")
+        context.application.stop_running()
+        return
+    logger.error(f"Telegram hata: {context.error}")
 
 
 def register_handlers(app: Application) -> None:
@@ -386,6 +396,7 @@ def main() -> None:
     )
 
     register_handlers(app)
+    app.add_error_handler(error_handler)
 
     # UptimeRobot health endpoint (Render'da PORT env var varsa aktif olur)
     _start_health_server()
