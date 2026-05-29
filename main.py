@@ -37,10 +37,13 @@ logger = setup_logger()
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    from telegram.error import Conflict
+    from telegram.error import Conflict, NetworkError, TimedOut
     if isinstance(context.error, Conflict):
-        logger.critical("Telegram Conflict: Başka bir bot instance çalışıyor. Bu instance durduruluyor.")
-        context.application.stop_running()
+        logger.warning("Telegram Conflict: Başka bir instance aktif. 30sn sonra tekrar denenecek...")
+        await asyncio.sleep(30)
+        return
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        logger.warning(f"Ağ hatası (geçici): {context.error}")
         return
     logger.error(f"Telegram hata: {context.error}")
 
