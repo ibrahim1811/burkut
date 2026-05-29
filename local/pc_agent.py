@@ -124,7 +124,184 @@ def _cmd_open_url(params: dict) -> tuple[bool, object]:
     return ok_flag, msg
 
 
+def _cmd_webcam_photo(params: dict) -> tuple[bool, object]:
+    from core.media_manager import take_webcam_photo
+    buf = take_webcam_photo()
+    buf.seek(0)
+    return True, base64.b64encode(buf.read()).decode()
+
+
+def _cmd_audio_record(params: dict) -> tuple[bool, object]:
+    duration = int(params.get("duration", 10))
+    from core.media_manager import record_audio
+    path = record_audio(duration)
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    import os as _os2; _os2.unlink(path)
+    return True, {"data": data, "duration": duration}
+
+
+def _cmd_full_status(params: dict) -> tuple[bool, object]:
+    from core.system_info import get_full_status
+    return True, get_full_status()
+
+
+def _cmd_process_list(params: dict) -> tuple[bool, object]:
+    from core.process_manager import get_running_processes, format_process_list
+    procs = get_running_processes(params.get("filter", ""))[:10]
+    return True, format_process_list(procs)
+
+
+def _cmd_programs_list(params: dict) -> tuple[bool, object]:
+    from core.process_manager import get_user_applications, format_process_list
+    return True, format_process_list(get_user_applications())
+
+
+def _cmd_network_info(params: dict) -> tuple[bool, object]:
+    from core.system_info import get_network_info
+    return True, get_network_info()
+
+
+def _cmd_shutdown(params: dict) -> tuple[bool, object]:
+    delay = int(params.get("delay", 0))
+    from core.power_manager import immediate_shutdown
+    def _do():
+        if delay: time.sleep(delay)
+        immediate_shutdown()
+    threading.Thread(target=_do, daemon=True).start()
+    return True, f"🔴 PC {'kapatılıyor' if not delay else f'{delay}s sonra kapatılacak'}..."
+
+
+def _cmd_restart(params: dict) -> tuple[bool, object]:
+    delay = int(params.get("delay", 0))
+    from core.power_manager import immediate_restart
+    def _do():
+        if delay: time.sleep(delay)
+        immediate_restart()
+    threading.Thread(target=_do, daemon=True).start()
+    return True, f"🔁 PC {'yeniden başlatılıyor' if not delay else f'{delay}s sonra yeniden başlatılacak'}..."
+
+
+def _cmd_sleep(params: dict) -> tuple[bool, object]:
+    from core.power_manager import sleep_pc
+    threading.Thread(target=sleep_pc, daemon=True).start()
+    return True, "😴 PC uyku moduna geçiyor..."
+
+
+def _cmd_hibernate(params: dict) -> tuple[bool, object]:
+    from core.power_manager import hibernate_pc
+    threading.Thread(target=hibernate_pc, daemon=True).start()
+    return True, "💤 PC hazırda beklemeye geçiyor..."
+
+
+def _cmd_cancel_shutdown(params: dict) -> tuple[bool, object]:
+    from core.power_manager import cancel_scheduled_shutdown
+    ok = cancel_scheduled_shutdown()
+    return True, "✅ Zamanlayıcı iptal edildi." if ok else "ℹ️ Aktif zamanlayıcı yok."
+
+
+def _cmd_shutdown_status(params: dict) -> tuple[bool, object]:
+    from core.power_manager import get_shutdown_status
+    return True, get_shutdown_status()
+
+
+def _cmd_kill_process(params: dict) -> tuple[bool, object]:
+    from core.process_manager import kill_process
+    ok, msg = kill_process(params.get("identifier", ""))
+    return ok, msg
+
+
+def _cmd_run_process(params: dict) -> tuple[bool, object]:
+    from core.process_manager import start_process
+    ok, msg = start_process(params.get("program", ""))
+    return ok, msg
+
+
+def _cmd_browse_files(params: dict) -> tuple[bool, object]:
+    from core.file_manager import list_directory, format_directory_listing
+    listing = list_directory(params.get("path", ""))
+    if "error" in listing:
+        return False, listing["error"]
+    return True, {"text": format_directory_listing(listing), "files": listing.get("files", [])}
+
+
+def _cmd_search_files(params: dict) -> tuple[bool, object]:
+    from core.file_manager import search_files, format_search_results
+    q = params.get("query", "")
+    return True, format_search_results(search_files(q), q)
+
+
+def _cmd_download_file(params: dict) -> tuple[bool, object]:
+    import os as _os3
+    from pathlib import Path as _Path
+    path = params.get("path", "")
+    if not _os3.path.isfile(path):
+        return False, f"Dosya bulunamadı: {path}"
+    size = _os3.path.getsize(path)
+    if size > 45 * 1024 * 1024:
+        return False, f"Dosya çok büyük ({size // (1024*1024)} MB). Max 45 MB."
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    return True, {"data": data, "name": _Path(path).name, "size": size}
+
+
+def _cmd_mute(params: dict) -> tuple[bool, object]:
+    from core.audio_controller import toggle_mute
+    now_muted = toggle_mute()
+    return True, "🔇 Sessiz moda geçildi." if now_muted else "🔊 Ses açıldı."
+
+
+def _cmd_brightness(params: dict) -> tuple[bool, object]:
+    from core.display_manager import get_brightness, set_brightness
+    if "level" in params:
+        lvl = set_brightness(int(params["level"]))
+        return True, f"☀️ Parlaklık %{lvl} olarak ayarlandı."
+    return True, get_brightness()
+
+
+def _cmd_gpu_info(params: dict) -> tuple[bool, object]:
+    from core.system_info import get_gpu_info
+    return True, get_gpu_info()
+
+
+def _cmd_lock_screen(params: dict) -> tuple[bool, object]:
+    from core.display_manager import lock_screen
+    lock_screen()
+    return True, "🔒 Ekran kilitlendi."
+
+
+def _cmd_windows_list(params: dict) -> tuple[bool, object]:
+    from core.window_manager import get_windows, get_active_window
+    return True, {"windows": get_windows(), "active": get_active_window()}
+
+
+def _cmd_close_window_fn(params: dict) -> tuple[bool, object]:
+    from core.window_manager import close_window
+    title = params.get("title", "")
+    ok = close_window(title)
+    return ok, f"✅ Kapatıldı: `{title}`" if ok else f"❌ Bulunamadı: `{title}`"
+
+
+def _cmd_focus_window_fn(params: dict) -> tuple[bool, object]:
+    from core.window_manager import focus_window
+    title = params.get("title", "")
+    ok = focus_window(title)
+    return ok, f"✅ Odaklanıldı: `{title}`" if ok else f"❌ Bulunamadı: `{title}`"
+
+
+def _cmd_clipboard_get(params: dict) -> tuple[bool, object]:
+    from core.clipboard_manager import get_clipboard
+    return True, get_clipboard() or ""
+
+
+def _cmd_clipboard_set(params: dict) -> tuple[bool, object]:
+    from core.clipboard_manager import set_clipboard
+    set_clipboard(params.get("text", ""))
+    return True, "✅ Panoya yazıldı."
+
+
 _HANDLERS = {
+    # Mevcut
     "screenshot":    _cmd_screenshot,
     "system_status": _cmd_system_status,
     "mouse_move":    _cmd_mouse_move,
@@ -134,6 +311,33 @@ _HANDLERS = {
     "volume":        _cmd_volume,
     "open_url":      _cmd_open_url,
     "ping":          lambda p: (True, "pong"),
+    # Yeni
+    "webcam_photo":    _cmd_webcam_photo,
+    "audio_record":    _cmd_audio_record,
+    "full_status":     _cmd_full_status,
+    "process_list":    _cmd_process_list,
+    "programs_list":   _cmd_programs_list,
+    "network_info":    _cmd_network_info,
+    "shutdown":        _cmd_shutdown,
+    "restart":         _cmd_restart,
+    "sleep":           _cmd_sleep,
+    "hibernate":       _cmd_hibernate,
+    "cancel_shutdown": _cmd_cancel_shutdown,
+    "shutdown_status": _cmd_shutdown_status,
+    "kill_process":    _cmd_kill_process,
+    "run_process":     _cmd_run_process,
+    "browse_files":    _cmd_browse_files,
+    "search_files":    _cmd_search_files,
+    "download_file":   _cmd_download_file,
+    "mute":            _cmd_mute,
+    "brightness":      _cmd_brightness,
+    "gpu_info":        _cmd_gpu_info,
+    "lock_screen":     _cmd_lock_screen,
+    "windows_list":    _cmd_windows_list,
+    "close_window":    _cmd_close_window_fn,
+    "focus_window":    _cmd_focus_window_fn,
+    "clipboard_get":   _cmd_clipboard_get,
+    "clipboard_set":   _cmd_clipboard_set,
 }
 
 

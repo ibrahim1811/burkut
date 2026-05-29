@@ -261,37 +261,13 @@ def _start_widget_and_voice():
 
 # ── Local PC agent relay ──────────────────────────────────────────────────────
 import os as _os
-import queue as _queue
-import uuid as _uuid
-
-_AGENT_TOKEN       = _os.environ.get("AGENT_TOKEN", "")
-_agent_cmd_queue:  _queue.Queue = _queue.Queue()   # Render → agent
-_agent_results:    dict         = {}                # cmd_id → result dict
-_agent_results_lock             = threading.Lock()
-_agent_last_seen:  float        = 0.0              # son poll zamanı
-
-
-def agent_is_online() -> bool:
-    """Son 10 saniye içinde poll geldiyse agent bağlı sayılır."""
-    return (time.time() - _agent_last_seen) < 10
-
-
-async def send_to_agent(action: str, params: dict, timeout: float = 12.0):
-    """
-    Komutu agent kuyruğuna ekle, sonucu bekle.
-    Agent çevrimdışıysa None döner.
-    """
-    if not agent_is_online():
-        return None
-    cmd_id = str(_uuid.uuid4())
-    _agent_cmd_queue.put({"id": cmd_id, "action": action, "params": params})
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        await asyncio.sleep(0.4)
-        with _agent_results_lock:
-            if cmd_id in _agent_results:
-                return _agent_results.pop(cmd_id)
-    return None
+from bot.agent_relay import (
+    agent_is_online, send_to_agent,
+    update_last_seen as _relay_update_seen,
+    get_next_cmd as _relay_get_cmd,
+    store_result as _relay_store_result,
+    AGENT_TOKEN as _AGENT_TOKEN,
+)
 
 
 def _start_health_server() -> None:
@@ -315,25 +291,19 @@ def _start_health_server() -> None:
 
         @health_app.route("/agent/poll")
         def agent_poll():
-            global _agent_last_seen
             token = request.headers.get("X-Agent-Token", "")
             if _AGENT_TOKEN and token != _AGENT_TOKEN:
                 return "Unauthorized", 401
-            _agent_last_seen = _time.time()
-            try:
-                cmd = _agent_cmd_queue.get_nowait()
-                return jsonify(cmd)
-            except _queue.Empty:
-                return jsonify({"type": "idle"})
+            _relay_update_seen()
+            cmd = _relay_get_cmd()
+            return jsonify(cmd if cmd else {"type": "idle"})
 
         @health_app.route("/agent/result", methods=["POST"])
         def agent_result():
             token = request.headers.get("X-Agent-Token", "")
             if _AGENT_TOKEN and token != _AGENT_TOKEN:
                 return "Unauthorized", 401
-            data = request.get_json(force=True)
-            with _agent_results_lock:
-                _agent_results[data["id"]] = data
+            _relay_store_result(request.get_json(force=True))
             return "OK", 200
 
         port = int(port_str)

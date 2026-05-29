@@ -19,6 +19,23 @@ from bot.messages import WELCOME, HELP, LOADING
 
 logger = get_logger()
 
+
+async def _agent_cmd(update: Update, action: str, params: dict, timeout: float = 15.0):
+    """PC agent'a komut gönder. Çevrimdışı/timeout/hata durumunda kullanıcıya bildir."""
+    from bot.agent_relay import send_to_agent, agent_is_online
+    if not agent_is_online():
+        await update.message.reply_text("🔌 PC agent çevrimdışı — PC'de `python local/pc_agent.py` çalışıyor mu?")
+        return None
+    result = await send_to_agent(action, params, timeout)
+    if result is None:
+        await update.message.reply_text("⏰ PC agent yanıt vermedi (timeout).")
+        return None
+    if not result.get("ok"):
+        await update.message.reply_text(f"❌ PC hatası: {result.get('error', '?')}")
+        return None
+    return result
+
+
 # ── AI oturum yönetimi ────────────────────────────────────────────────────────
 # Her kullanıcıya kalıcı oturum ID'si atanır (bot yeniden başlayınca sıfırlanır)
 _ai_sessions: dict[int, str] = {}
@@ -155,9 +172,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/status")
     msg = await update.message.reply_text("⏳ Sistem bilgileri toplanıyor...")
-    from core.system_info import get_full_status
-    status = get_full_status()
-    await msg.edit_text(status, parse_mode="Markdown")
+    result = await _agent_cmd(update, "full_status", {})
+    if result:
+        await msg.edit_text(result["data"], parse_mode="Markdown")
 
 
 @authorized_only
@@ -166,8 +183,12 @@ async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/foto")
     msg = await update.message.reply_text("📷 Kameradan fotoğraf çekiliyor...")
-    await _take_and_send_webcam_photo(context.bot, update.effective_chat.id)
-    await msg.delete()
+    result = await _agent_cmd(update, "webcam_photo", {}, timeout=20.0)
+    if result:
+        import base64 as _b64
+        buf = io.BytesIO(_b64.b64decode(result["data"]))
+        await context.bot.send_photo(update.effective_chat.id, photo=buf, caption="📷 Webcam görüntüsü")
+        await msg.delete()
 
 
 @authorized_only
@@ -195,48 +216,20 @@ async def cmd_ses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     log_command(user.id, user.username or "unknown", f"/ses {duration}")
     msg = await update.message.reply_text(f"🎙️ {duration} saniyelik ses kaydediliyor...")
-
-    try:
-        import os
-        from core.media_manager import record_audio
-
-        loop = asyncio.get_running_loop()
-        audio_path = await loop.run_in_executor(None, record_audio, duration)
-    except Exception as e:
-        logger.error(f"Ses kaydı hatası: {e}")
-        await msg.edit_text(f"❌ Ses kaydı alınamadı: {e}")
-        return
-
-    from core.offline_queue import is_online, enqueue_audio
-    chat_id = update.effective_chat.id
-
-    if not is_online():
-        enqueue_audio(chat_id, audio_path, title=f"Ses kaydı ({duration}s)", duration=duration)
-        try:
-            os.unlink(audio_path)
-        except Exception:
-            pass
-        await msg.edit_text("📵 İnternet yok — ses kaydı kuyruğa alındı, bağlantı gelince gönderilecek.")
-        return
-
-    try:
-        with open(audio_path, "rb") as f:
-            await context.bot.send_audio(
-                chat_id=chat_id,
-                audio=f,
-                title=f"Ses kaydı ({duration}s)",
-                duration=duration,
-            )
-        os.unlink(audio_path)
+    result = await _agent_cmd(update, "audio_record", {"duration": duration}, timeout=duration + 10.0)
+    if result:
+        import base64 as _b64
+        d = result["data"]
+        audio_bytes = _b64.b64decode(d["data"])
+        buf = io.BytesIO(audio_bytes)
+        buf.name = "kayit.ogg"
+        await context.bot.send_audio(
+            chat_id=update.effective_chat.id,
+            audio=buf,
+            title=f"Ses kaydı ({duration}s)",
+            duration=d["duration"],
+        )
         await msg.delete()
-    except Exception as e:
-        logger.warning(f"Ses kaydı gönderilemedi, kuyruğa alınıyor: {e}")
-        enqueue_audio(chat_id, audio_path, title=f"Ses kaydı ({duration}s)", duration=duration)
-        try:
-            os.unlink(audio_path)
-        except Exception:
-            pass
-        await msg.edit_text("📵 İnternet yok — ses kaydı kuyruğa alındı, bağlantı gelince gönderilecek.")
 
 
 @authorized_only
@@ -245,39 +238,41 @@ async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/screenshot")
     msg = await update.message.reply_text("📸 Ekran görüntüsü alınıyor...")
-    await _take_and_send_screenshot(context.bot, update.effective_chat.id)
-    await msg.delete()
+    result = await _agent_cmd(update, "screenshot", {}, timeout=20.0)
+    if result:
+        import base64 as _b64
+        buf = io.BytesIO(_b64.b64decode(result["data"]))
+        await context.bot.send_photo(update.effective_chat.id, photo=buf, caption="📸 Ekran görüntüsü")
+        await msg.delete()
 
 
 @authorized_only
 @rate_limit("processes", seconds=15)
 async def cmd_processes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    args = context.args
-    filter_name = args[0] if args else ""
+    filter_name = context.args[0] if context.args else ""
     log_command(user.id, user.username or "unknown", f"/processes {filter_name}")
-
-    from core.process_manager import get_running_processes, format_process_list
     msg = await update.message.reply_text("⏳ Süreçler listeleniyor...")
-    procs = get_running_processes(filter_name)[:10]
-    text = format_process_list(procs)
-    await msg.edit_text(text, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+    result = await _agent_cmd(update, "process_list", {"filter": filter_name})
+    if result:
+        await msg.edit_text(result["data"], parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
 
 @authorized_only
 async def cmd_network(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/network")
-    from core.system_info import get_network_info
-    net = get_network_info()
-    text = (
-        f"🌐 *Ağ Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏠 Yerel IP: `{net['local_ip']}`\n"
-        f"📤 Gönderilen: `{format_bytes(net['bytes_sent'])}`\n"
-        f"📥 Alınan: `{format_bytes(net['bytes_recv'])}`\n"
-        f"🔗 Aktif bağlantı: `{net['connections']}`"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    result = await _agent_cmd(update, "network_info", {})
+    if result:
+        net = result["data"]
+        text = (
+            f"🌐 *Ağ Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🏠 Yerel IP: `{net['local_ip']}`\n"
+            f"📤 Gönderilen: `{format_bytes(net['bytes_sent'])}`\n"
+            f"📥 Alınan: `{format_bytes(net['bytes_recv'])}`\n"
+            f"🔗 Aktif bağlantı: `{net['connections']}`"
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # ── Güç yönetimi ──────────────────────────────────────────────────────────────
@@ -363,47 +358,43 @@ async def cmd_hibernate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def cmd_cancel_shutdown(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/cancel_shutdown")
-    from core.power_manager import cancel_scheduled_shutdown
-    if cancel_scheduled_shutdown():
-        await update.message.reply_text("✅ Zamanlı işlem başarıyla iptal edildi.")
-    else:
-        await update.message.reply_text("ℹ️ Aktif bir zamanlı işlem bulunamadı.")
+    result = await _agent_cmd(update, "cancel_shutdown", {})
+    if result:
+        await update.message.reply_text(result["data"])
 
 
 @authorized_only
 async def cmd_shutdown_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/shutdown_status")
-    from core.power_manager import get_shutdown_status
-    status = get_shutdown_status()
-    if status:
-        action_label = "Kapatma" if status["action"] == "shutdown" else "Yeniden başlatma"
-        await update.message.reply_text(
-            f"⏱️ *Aktif Zamanlayıcı*\n"
-            f"İşlem: `{action_label}`\n"
-            f"Kalan süre: `{format_seconds(status['remaining'])}`",
-            parse_mode="Markdown",
-        )
-    else:
-        await update.message.reply_text("ℹ️ Aktif bir zamanlayıcı yok.")
+    result = await _agent_cmd(update, "shutdown_status", {})
+    if result:
+        status = result["data"]
+        if status:
+            action_label = "Kapatma" if status["action"] == "shutdown" else "Yeniden başlatma"
+            await update.message.reply_text(
+                f"⏱️ *Aktif Zamanlayıcı*\n"
+                f"İşlem: `{action_label}`\n"
+                f"Kalan süre: `{format_seconds(status['remaining'])}`",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text("ℹ️ Aktif bir zamanlayıcı yok.")
 
 
 # ── Program kontrolü ──────────────────────────────────────────────────────────
 @authorized_only
 async def cmd_programs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    args = context.args
-    filter_name = args[0] if args else ""
+    filter_name = context.args[0] if context.args else ""
     log_command(user.id, user.username or "unknown", f"/programs {filter_name}")
-
-    from core.process_manager import get_user_applications, get_running_processes, format_process_list
     msg = await update.message.reply_text("⏳ Uygulamalar listeleniyor...")
     if filter_name:
-        procs = get_running_processes(filter_name)[:15]
+        result = await _agent_cmd(update, "process_list", {"filter": filter_name})
     else:
-        procs = get_user_applications()
-    text = format_process_list(procs)
-    await msg.edit_text(text, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+        result = await _agent_cmd(update, "programs_list", {})
+    if result:
+        await msg.edit_text(result["data"], parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
 
 @authorized_only
@@ -436,13 +427,11 @@ async def cmd_run(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="Markdown",
         )
         return
-
     program = " ".join(context.args)
     log_command(user.id, user.username or "unknown", f"/run {program}")
-
-    from core.process_manager import start_process
-    success, msg = start_process(program)
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    result = await _agent_cmd(update, "run_process", {"program": program})
+    if result:
+        await update.message.reply_text(result["data"], parse_mode="Markdown")
 
 
 # ── Dosya işlemleri ───────────────────────────────────────────────────────────
@@ -474,17 +463,12 @@ async def cmd_browse(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     msg = await update.message.reply_text("⏳ Klasör içeriği yükleniyor...")
-    listing = list_directory(path_str)
-
-    if "error" in listing:
-        await msg.edit_text(f"❌ {listing['error']}", parse_mode="Markdown")
-        return
-
-    # Session'a kaydet
-    store_browse_session(user.id, path_str, listing["files"])
-    text = format_directory_listing(listing)
-    from utils.helpers import truncate
-    await msg.edit_text(truncate(text), parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+    result = await _agent_cmd(update, "browse_files", {"path": path_str})
+    if result:
+        d = result["data"]
+        store_browse_session(user.id, path_str, d["files"])
+        from utils.helpers import truncate
+        await msg.edit_text(truncate(d["text"]), parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
 
 @authorized_only
@@ -530,12 +514,15 @@ async def cmd_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text(f"🚫 {ext_error}", parse_mode="Markdown")
         return
 
-    msg = await update.message.reply_text(f"📤 Dosya gönderiliyor...\n`{Path(file_path).name}`")
-    success, result = await send_file(context.bot, update.effective_chat.id, file_path, msg)
-    if success:
+    msg = await update.message.reply_text(f"📤 `{Path(file_path).name}` indiriliyor...")
+    agent_result = await _agent_cmd(update, "download_file", {"path": file_path}, timeout=30.0)
+    if agent_result:
+        import base64 as _b64
+        d = agent_result["data"]
+        buf = io.BytesIO(_b64.b64decode(d["data"]))
+        buf.name = d["name"]
+        await context.bot.send_document(update.effective_chat.id, document=buf, filename=d["name"])
         await msg.delete()
-    else:
-        await msg.edit_text(result, parse_mode="Markdown")
 
 
 @authorized_only
@@ -552,11 +539,10 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     log_command(user.id, user.username or "unknown", f"/search {query}")
 
     msg = await update.message.reply_text(f"🔍 `{query}` aranıyor...")
-    from core.file_manager import search_files, format_search_results
-    results = search_files(query)
-    text = format_search_results(results, query)
-    from utils.helpers import truncate
-    await msg.edit_text(truncate(text), parse_mode="Markdown")
+    result = await _agent_cmd(update, "search_files", {"query": query}, timeout=20.0)
+    if result:
+        from utils.helpers import truncate
+        await msg.edit_text(truncate(result["data"]), parse_mode="Markdown")
 
 
 @authorized_only
@@ -587,12 +573,14 @@ async def cmd_quicksend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     msg = await update.message.reply_text(f"📤 `{shortcut}` gönderiliyor...")
-    from core.file_manager import send_file
-    success, result = await send_file(context.bot, update.effective_chat.id, file_path, msg)
-    if success:
+    agent_result = await _agent_cmd(update, "download_file", {"path": file_path}, timeout=30.0)
+    if agent_result:
+        import base64 as _b64
+        d = agent_result["data"]
+        buf = io.BytesIO(_b64.b64decode(d["data"]))
+        buf.name = d["name"]
+        await context.bot.send_document(update.effective_chat.id, document=buf, filename=d["name"])
         await msg.delete()
-    else:
-        await msg.edit_text(result, parse_mode="Markdown")
 
 
 # ── Dosya yükleme (gelen dosya) ───────────────────────────────────────────────
@@ -773,24 +761,25 @@ async def cmd_volume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text(f"❌ Hata: {e}")
         return
 
-    info = get_volume_info()
-    muted_label = " (🔇 Sessiz)" if info["muted"] else ""
-    bar_filled = int(info["level"] / 10)
-    bar = "▓" * bar_filled + "░" * (10 - bar_filled)
-    await update.message.reply_text(
-        f"🔊 *Ses Seviyesi*\n[{bar}] `%{info['level']}`{muted_label}",
-        parse_mode="Markdown",
-    )
+    result = await _agent_cmd(update, "volume", {})
+    if result:
+        info = result["data"]
+        muted_label = " (🔇 Sessiz)" if info["muted"] else ""
+        bar_filled = int(info["level"] / 10)
+        bar = "▓" * bar_filled + "░" * (10 - bar_filled)
+        await update.message.reply_text(
+            f"🔊 *Ses Seviyesi*\n[{bar}] `%{info['level']}`{muted_label}",
+            parse_mode="Markdown",
+        )
 
 
 @authorized_only
 async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/sessiz")
-    from core.audio_controller import toggle_mute
-    now_muted = toggle_mute()
-    label = "🔇 Sessiz" if now_muted else "🔊 Sesli"
-    await update.message.reply_text(f"{label} moda geçildi.", parse_mode="Markdown")
+    result = await _agent_cmd(update, "mute", {})
+    if result:
+        await update.message.reply_text(result["data"], parse_mode="Markdown")
 
 
 # ── Parlaklık ─────────────────────────────────────────────────────────────────
@@ -804,23 +793,23 @@ async def cmd_brightness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if context.args:
         try:
             level = int(context.args[0])
-            new_level = set_brightness(level)
-            await update.message.reply_text(
-                f"☀️ Parlaklık *%{new_level}* olarak ayarlandı.", parse_mode="Markdown"
-            )
-        except Exception as e:
-            await update.message.reply_text(f"❌ Hata: {e}")
+        except ValueError:
+            await update.message.reply_text("❌ Geçersiz değer.")
+            return
+        result = await _agent_cmd(update, "brightness", {"level": level})
+        if result:
+            await update.message.reply_text(result["data"], parse_mode="Markdown")
         return
 
-    brightness = get_brightness()
-    if brightness < 0:
-        await update.message.reply_text("❌ Parlaklık bilgisi alınamadı (harici monitör olabilir).")
-        return
-    bar_filled = int(brightness / 10)
-    bar = "▓" * bar_filled + "░" * (10 - bar_filled)
-    await update.message.reply_text(
-        f"☀️ *Parlaklık*\n[{bar}] `%{brightness}`", parse_mode="Markdown"
-    )
+    result = await _agent_cmd(update, "brightness", {})
+    if result:
+        brightness = result["data"]
+        if brightness < 0:
+            await update.message.reply_text("❌ Parlaklık bilgisi alınamadı (harici monitör olabilir).")
+            return
+        bar_filled = int(brightness / 10)
+        bar = "▓" * bar_filled + "░" * (10 - bar_filled)
+        await update.message.reply_text(f"☀️ *Parlaklık*\n[{bar}] `%{brightness}`", parse_mode="Markdown")
 
 
 # ── Ekran kilitle ─────────────────────────────────────────────────────────────
@@ -828,9 +817,9 @@ async def cmd_brightness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/kilitle")
-    from core.display_manager import lock_screen
-    lock_screen()
-    await update.message.reply_text("🔒 Ekran kilitlendi.")
+    result = await _agent_cmd(update, "lock_screen", {})
+    if result:
+        await update.message.reply_text(result["data"])
 
 
 # ── GPU durumu ────────────────────────────────────────────────────────────────
@@ -838,27 +827,24 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_gpu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/gpu")
-    from core.system_info import get_gpu_info
-    gpu_data = get_gpu_info()
-
-    if not gpu_data["available"]:
-        await update.message.reply_text(
-            f"❌ GPU bilgisi alınamadı: {gpu_data.get('error', 'Bilinmeyen hata')}"
-        )
-        return
-
-    lines = ["🎮 *GPU Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
-    for g in gpu_data["gpus"]:
-        usage_bar = "▓" * int(g["usage"] / 10) + "░" * (10 - int(g["usage"] / 10))
-        vram_pct = round(g["vram_used"] / g["vram_total"] * 100) if g["vram_total"] > 0 else 0
-        vram_bar = "▓" * int(vram_pct / 10) + "░" * (10 - int(vram_pct / 10))
-        lines.append(
-            f"**{g['name']}**\n"
-            f"  GPU  [{usage_bar}] `{g['usage']}%`\n"
-            f"  VRAM [{vram_bar}] `{format_bytes(g['vram_used'])} / {format_bytes(g['vram_total'])}`\n"
-            f"  Sıcaklık: `{g['temp']}°C`\n"
-        )
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    result = await _agent_cmd(update, "gpu_info", {})
+    if result:
+        gpu_data = result["data"]
+        if not gpu_data["available"]:
+            await update.message.reply_text(f"❌ GPU bilgisi alınamadı: {gpu_data.get('error', '?')}")
+            return
+        lines = ["🎮 *GPU Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
+        for g in gpu_data["gpus"]:
+            usage_bar = "▓" * int(g["usage"] / 10) + "░" * (10 - int(g["usage"] / 10))
+            vram_pct = round(g["vram_used"] / g["vram_total"] * 100) if g["vram_total"] > 0 else 0
+            vram_bar = "▓" * int(vram_pct / 10) + "░" * (10 - int(vram_pct / 10))
+            lines.append(
+                f"*{g['name']}*\n"
+                f"  GPU  [{usage_bar}] `{g['usage']}%`\n"
+                f"  VRAM [{vram_bar}] `{format_bytes(g['vram_used'])} / {format_bytes(g['vram_total'])}`\n"
+                f"  Sıcaklık: `{g['temp']}°C`\n"
+            )
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 # ── Pencere yönetimi ──────────────────────────────────────────────────────────
@@ -866,24 +852,20 @@ async def cmd_gpu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_windows(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/pencereler")
-    from core.window_manager import get_windows, get_active_window
-
-    windows = get_windows()
-    active = get_active_window()
-
-    if not windows:
-        await update.message.reply_text("ℹ️ Açık pencere bulunamadı.")
-        return
-
-    lines = ["🪟 *Açık Pencereler*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
-    for i, w in enumerate(windows[:20], 1):
-        marker = "▶" if w["title"] == active else "  "
-        minimized = " (küçültülmüş)" if w["minimized"] else ""
-        title = w["title"][:45]
-        lines.append(f"`{i:2}.` {marker} {title}{minimized}")
-
-    lines.append(f"\n_Toplam: {len(windows)} pencere_")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    result = await _agent_cmd(update, "windows_list", {})
+    if result:
+        d = result["data"]
+        windows, active = d["windows"], d["active"]
+        if not windows:
+            await update.message.reply_text("ℹ️ Açık pencere bulunamadı.")
+            return
+        lines = ["🪟 *Açık Pencereler*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
+        for i, w in enumerate(windows[:20], 1):
+            marker = "▶" if w["title"] == active else "  "
+            minimized = " (küçültülmüş)" if w["minimized"] else ""
+            lines.append(f"`{i:2}.` {marker} {w['title'][:45]}{minimized}")
+        lines.append(f"\n_Toplam: {len(windows)} pencere_")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 @authorized_only
@@ -896,12 +878,9 @@ async def cmd_close_window(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     title = " ".join(context.args)
     log_command(user.id, user.username or "unknown", f"/pencere_kapat {title}")
-    from core.window_manager import close_window
-    ok = close_window(title)
-    await update.message.reply_text(
-        f"✅ Pencere kapatıldı: `{title}`" if ok else f"❌ Pencere bulunamadı: `{title}`",
-        parse_mode="Markdown",
-    )
+    result = await _agent_cmd(update, "close_window", {"title": title})
+    if result:
+        await update.message.reply_text(result["data"], parse_mode="Markdown")
 
 
 @authorized_only
@@ -914,12 +893,9 @@ async def cmd_focus_window(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     title = " ".join(context.args)
     log_command(user.id, user.username or "unknown", f"/pencere_odak {title}")
-    from core.window_manager import focus_window
-    ok = focus_window(title)
-    await update.message.reply_text(
-        f"✅ Pencereye odaklanıldı: `{title}`" if ok else f"❌ Pencere bulunamadı: `{title}`",
-        parse_mode="Markdown",
-    )
+    result = await _agent_cmd(update, "focus_window", {"title": title})
+    if result:
+        await update.message.reply_text(result["data"], parse_mode="Markdown")
 
 
 # ── Pano ─────────────────────────────────────────────────────────────────────
@@ -927,33 +903,30 @@ async def cmd_focus_window(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def cmd_clipboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/pano")
-    from core.clipboard_manager import get_clipboard
-    content = get_clipboard()
-    if not content:
-        await update.message.reply_text("📋 Pano boş.")
-        return
-    preview = content[:500] + ("..." if len(content) > 500 else "")
-    await update.message.reply_text(
-        f"📋 *Pano İçeriği* ({len(content)} karakter)\n━━━━━━━━━━━━━━━━━━━━━━\n{preview}",
-        parse_mode="Markdown",
-    )
+    result = await _agent_cmd(update, "clipboard_get", {})
+    if result:
+        content = result["data"]
+        if not content:
+            await update.message.reply_text("📋 Pano boş.")
+            return
+        preview = content[:500] + ("..." if len(content) > 500 else "")
+        await update.message.reply_text(
+            f"📋 *Pano İçeriği* ({len(content)} karakter)\n━━━━━━━━━━━━━━━━━━━━━━\n{preview}",
+            parse_mode="Markdown",
+        )
 
 
 @authorized_only
 async def cmd_clipboard_write(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not context.args:
-        await update.message.reply_text(
-            "❌ Kullanım: `/pano_yaz [metin]`", parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ Kullanım: `/pano_yaz [metin]`", parse_mode="Markdown")
         return
     text = " ".join(context.args)
     log_command(user.id, user.username or "unknown", "/pano_yaz")
-    from core.clipboard_manager import set_clipboard
-    set_clipboard(text)
-    await update.message.reply_text(
-        f"✅ Panoya yazıldı: `{text[:100]}`", parse_mode="Markdown"
-    )
+    result = await _agent_cmd(update, "clipboard_set", {"text": text})
+    if result:
+        await update.message.reply_text(f"✅ Panoya yazıldı: `{text[:100]}`", parse_mode="Markdown")
 
 
 # ── Mouse & Klavye ────────────────────────────────────────────────────────────
@@ -971,9 +944,9 @@ async def cmd_mouse_move(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ Geçersiz koordinat.")
         return
     log_command(user.id, user.username or "unknown", f"/fare {x} {y}")
-    from core.keyboard_mouse import move_mouse, get_mouse_position
-    move_mouse(x, y)
-    await update.message.reply_text(f"🖱️ Fare `({x}, {y})` koordinatına taşındı.", parse_mode="Markdown")
+    result = await _agent_cmd(update, "mouse_move", {"x": x, "y": y})
+    if result:
+        await update.message.reply_text(f"🖱️ Fare `({x}, {y})` koordinatına taşındı.", parse_mode="Markdown")
 
 
 @authorized_only
@@ -990,9 +963,9 @@ async def cmd_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("❌ Geçersiz koordinat.")
         return
     log_command(user.id, user.username or "unknown", f"/tikla {x} {y}")
-    from core.keyboard_mouse import click
-    click(x, y)
-    await update.message.reply_text(f"🖱️ `({x}, {y})` koordinatına tıklandı.", parse_mode="Markdown")
+    result = await _agent_cmd(update, "mouse_click", {"x": x, "y": y})
+    if result:
+        await update.message.reply_text(f"🖱️ `({x}, {y})` koordinatına tıklandı.", parse_mode="Markdown")
 
 
 @authorized_only
@@ -1005,11 +978,9 @@ async def cmd_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text = " ".join(context.args)
     log_command(user.id, user.username or "unknown", "/yaz")
-    from core.keyboard_mouse import press_key
-    import pyperclip
-    pyperclip.copy(text)
-    press_key("ctrl", "v")
-    await update.message.reply_text(f"⌨️ Yazıldı: `{text[:100]}`", parse_mode="Markdown")
+    result = await _agent_cmd(update, "type_text", {"text": text})
+    if result:
+        await update.message.reply_text(f"⌨️ Yazıldı: `{text[:100]}`", parse_mode="Markdown")
 
 
 # ── Launcher ──────────────────────────────────────────────────────────────────
@@ -1027,20 +998,12 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     target = " ".join(context.args)
     log_command(user.id, user.username or "unknown", f"/ac {target}")
 
-    from core.launcher import open_url, open_app, find_and_open
-
     if target.startswith(("http://", "https://", "www.")):
-        ok, msg = open_url(target)
-    elif "." in target and not target.startswith("C:") and not target.startswith("\\"):
-        ext = target.rsplit(".", 1)[-1].lower()
-        if ext in ("pdf", "docx", "xlsx", "txt", "png", "jpg", "mp3", "mp4", "zip"):
-            ok, msg = find_and_open(target)
-        else:
-            ok, msg = open_app(target)
+        result = await _agent_cmd(update, "open_url", {"url": target})
     else:
-        ok, msg = open_app(target)
-
-    await update.message.reply_text(msg, parse_mode="Markdown")
+        result = await _agent_cmd(update, "open_app", {"app": target})
+    if result:
+        await update.message.reply_text(result["data"], parse_mode="Markdown")
 
 
 # ── Ses asistanı durumu ───────────────────────────────────────────────────────

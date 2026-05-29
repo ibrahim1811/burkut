@@ -16,6 +16,22 @@ from bot.messages import HELP
 logger = get_logger()
 
 
+async def _agent_cb(query, action: str, params: dict, timeout: float = 15.0):
+    """Callback içinden PC agent'a komut gönder."""
+    from bot.agent_relay import send_to_agent, agent_is_online
+    if not agent_is_online():
+        await query.edit_message_text("🔌 PC agent çevrimdışı.")
+        return None
+    result = await send_to_agent(action, params, timeout)
+    if result is None:
+        await query.edit_message_text("⏰ PC agent yanıt vermedi.")
+        return None
+    if not result.get("ok"):
+        await query.edit_message_text(f"❌ PC hatası: {result.get('error', '?')}")
+        return None
+    return result
+
+
 @authorized_only
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
@@ -54,93 +70,81 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
     elif data == "cmd_gpu":
-        from core.system_info import get_gpu_info
-        from utils.helpers import format_bytes
-        gpu_data = get_gpu_info()
-        if not gpu_data["available"]:
-            await query.edit_message_text(
-                f"❌ GPU bilgisi alınamadı: {gpu_data.get('error', '')}",
-                reply_markup=back_to_menu_keyboard(),
-            )
-        else:
-            lines = ["🎮 *GPU Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
-            for g in gpu_data["gpus"]:
-                usage_bar = "▓" * int(g["usage"] / 10) + "░" * (10 - int(g["usage"] / 10))
-                vram_pct = round(g["vram_used"] / g["vram_total"] * 100) if g["vram_total"] > 0 else 0
-                vram_bar = "▓" * int(vram_pct / 10) + "░" * (10 - int(vram_pct / 10))
-                lines.append(
-                    f"*{g['name']}*\n"
-                    f"  GPU  [{usage_bar}] `{g['usage']}%`\n"
-                    f"  VRAM [{vram_bar}] `{format_bytes(g['vram_used'])} / {format_bytes(g['vram_total'])}`\n"
-                    f"  Sıcaklık: `{g['temp']}°C`\n"
-                )
-            await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+        result = await _agent_cb(query, "gpu_info", {})
+        if result:
+            from utils.helpers import format_bytes
+            gpu_data = result["data"]
+            if not gpu_data["available"]:
+                await query.edit_message_text(f"❌ GPU bilgisi alınamadı: {gpu_data.get('error', '')}", reply_markup=back_to_menu_keyboard())
+            else:
+                lines = ["🎮 *GPU Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
+                for g in gpu_data["gpus"]:
+                    usage_bar = "▓" * int(g["usage"] / 10) + "░" * (10 - int(g["usage"] / 10))
+                    vram_pct = round(g["vram_used"] / g["vram_total"] * 100) if g["vram_total"] > 0 else 0
+                    vram_bar = "▓" * int(vram_pct / 10) + "░" * (10 - int(vram_pct / 10))
+                    lines.append(f"*{g['name']}*\n  GPU  [{usage_bar}] `{g['usage']}%`\n  VRAM [{vram_bar}] `{format_bytes(g['vram_used'])} / {format_bytes(g['vram_total'])}`\n  Sıcaklık: `{g['temp']}°C`\n")
+                await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
     elif data == "cmd_volume":
-        from core.audio_controller import get_volume_info
-        info = get_volume_info()
-        muted_label = " (🔇 Sessiz)" if info["muted"] else ""
-        bar_filled = int(info["level"] / 10)
-        bar = "▓" * bar_filled + "░" * (10 - bar_filled)
-        await query.edit_message_text(
-            f"🔊 *Ses Seviyesi*\n[{bar}] `%{info['level']}`{muted_label}\n\n"
-            f"Değiştirmek için: `/volume [0-100]`",
-            parse_mode="Markdown",
-            reply_markup=control_menu_keyboard(),
-        )
+        result = await _agent_cb(query, "volume", {})
+        if result:
+            info = result["data"]
+            muted_label = " (🔇 Sessiz)" if info["muted"] else ""
+            bar_filled = int(info["level"] / 10)
+            bar = "▓" * bar_filled + "░" * (10 - bar_filled)
+            await query.edit_message_text(
+                f"🔊 *Ses Seviyesi*\n[{bar}] `%{info['level']}`{muted_label}\n\nDeğiştirmek için: `/volume [0-100]`",
+                parse_mode="Markdown", reply_markup=control_menu_keyboard(),
+            )
 
     elif data == "cmd_mute":
-        from core.audio_controller import toggle_mute
-        now_muted = toggle_mute()
-        label = "🔇 Sessiz" if now_muted else "🔊 Sesli"
-        await query.edit_message_text(
-            f"{label} moda geçildi.",
-            reply_markup=control_menu_keyboard(),
-        )
+        result = await _agent_cb(query, "mute", {})
+        if result:
+            await query.edit_message_text(result["data"], reply_markup=control_menu_keyboard())
 
     elif data == "cmd_brightness":
-        from core.display_manager import get_brightness
-        brightness = get_brightness()
-        if brightness < 0:
-            text = "❌ Parlaklık bilgisi alınamadı (harici monitör olabilir)."
-        else:
-            bar_filled = int(brightness / 10)
-            bar = "▓" * bar_filled + "░" * (10 - bar_filled)
-            text = (
-                f"☀️ *Parlaklık*\n[{bar}] `%{brightness}`\n\n"
-                f"Değiştirmek için: `/parlaklik [0-100]`"
-            )
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=control_menu_keyboard())
+        result = await _agent_cb(query, "brightness", {})
+        if result:
+            brightness = result["data"]
+            if brightness < 0:
+                text = "❌ Parlaklık bilgisi alınamadı (harici monitör olabilir)."
+            else:
+                bar_filled = int(brightness / 10)
+                bar = "▓" * bar_filled + "░" * (10 - bar_filled)
+                text = f"☀️ *Parlaklık*\n[{bar}] `%{brightness}`\n\nDeğiştirmek için: `/parlaklik [0-100]`"
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=control_menu_keyboard())
 
     elif data == "cmd_lock":
-        from core.display_manager import lock_screen
-        lock_screen()
-        await query.edit_message_text("🔒 Ekran kilitlendi.")
+        result = await _agent_cb(query, "lock_screen", {})
+        if result:
+            await query.edit_message_text(result["data"])
 
     elif data == "cmd_windows":
-        from core.window_manager import get_windows, get_active_window
-        windows = get_windows()
-        active = get_active_window()
-        if not windows:
-            text = "ℹ️ Açık pencere bulunamadı."
-        else:
-            lines = ["🪟 *Açık Pencereler*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
-            for i, w in enumerate(windows[:15], 1):
-                marker = "▶" if w["title"] == active else "  "
-                minimized = " ↓" if w["minimized"] else ""
-                lines.append(f"`{i:2}.` {marker} {w['title'][:40]}{minimized}")
-            text = "\n".join(lines)
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=control_menu_keyboard())
+        result = await _agent_cb(query, "windows_list", {})
+        if result:
+            d = result["data"]
+            windows, active = d["windows"], d["active"]
+            if not windows:
+                text = "ℹ️ Açık pencere bulunamadı."
+            else:
+                lines = ["🪟 *Açık Pencereler*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
+                for i, w in enumerate(windows[:15], 1):
+                    marker = "▶" if w["title"] == active else "  "
+                    minimized = " ↓" if w["minimized"] else ""
+                    lines.append(f"`{i:2}.` {marker} {w['title'][:40]}{minimized}")
+                text = "\n".join(lines)
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=control_menu_keyboard())
 
     elif data == "cmd_clipboard":
-        from core.clipboard_manager import get_clipboard
-        content = get_clipboard()
-        if not content:
-            text = "📋 Pano boş."
-        else:
-            preview = content[:400] + ("..." if len(content) > 400 else "")
-            text = f"📋 *Pano* ({len(content)} karakter)\n━━━━━━━━━━━━━━━━━━━━━━\n{preview}"
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=control_menu_keyboard())
+        result = await _agent_cb(query, "clipboard_get", {})
+        if result:
+            content = result["data"]
+            if not content:
+                text = "📋 Pano boş."
+            else:
+                preview = content[:400] + ("..." if len(content) > 400 else "")
+                text = f"📋 *Pano* ({len(content)} karakter)\n━━━━━━━━━━━━━━━━━━━━━━\n{preview}"
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=control_menu_keyboard())
 
     elif data == "cmd_voice_status":
         await query.edit_message_text(
@@ -164,34 +168,37 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # ── Sistem komutları ──────────────────────────────────────────────────
     elif data == "cmd_status":
         await query.edit_message_text("⏳ Sistem bilgileri toplanıyor...")
-        from core.system_info import get_full_status
-        status = get_full_status()
-        await query.edit_message_text(status, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+        result = await _agent_cb(query, "full_status", {})
+        if result:
+            await query.edit_message_text(result["data"], parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
     elif data == "cmd_screenshot":
         await query.edit_message_text("📸 Ekran görüntüsü alınıyor...")
-        from bot.handlers import _take_and_send_screenshot
-        await _take_and_send_screenshot(context.bot, chat_id)
-        await query.delete_message()
+        result = await _agent_cb(query, "screenshot", {}, timeout=20.0)
+        if result:
+            import base64 as _b64, io as _io
+            buf = _io.BytesIO(_b64.b64decode(result["data"]))
+            await context.bot.send_photo(chat_id, photo=buf, caption="📸 Ekran görüntüsü")
+            await query.delete_message()
 
     elif data == "cmd_processes":
-        from core.process_manager import get_running_processes, format_process_list
-        procs = get_running_processes()[:10]
-        text = format_process_list(procs)
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+        result = await _agent_cb(query, "process_list", {"filter": ""})
+        if result:
+            await query.edit_message_text(result["data"], parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
     elif data == "cmd_network":
-        from core.system_info import get_network_info
-        from utils.helpers import format_bytes
-        net = get_network_info()
-        text = (
-            f"🌐 *Ağ Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🏠 Yerel IP: `{net['local_ip']}`\n"
-            f"📤 Gönderilen: `{format_bytes(net['bytes_sent'])}`\n"
-            f"📥 Alınan: `{format_bytes(net['bytes_recv'])}`\n"
-            f"🔗 Aktif bağlantı: `{net['connections']}`"
-        )
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+        result = await _agent_cb(query, "network_info", {})
+        if result:
+            from utils.helpers import format_bytes
+            net = result["data"]
+            text = (
+                f"🌐 *Ağ Durumu*\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🏠 Yerel IP: `{net['local_ip']}`\n"
+                f"📤 Gönderilen: `{format_bytes(net['bytes_sent'])}`\n"
+                f"📥 Alınan: `{format_bytes(net['bytes_recv'])}`\n"
+                f"🔗 Aktif bağlantı: `{net['connections']}`"
+            )
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
     # ── Güç yönetimi ─────────────────────────────────────────────────────
     elif data == "power_shutdown":
@@ -227,36 +234,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
     elif data == "power_cancel":
-        from core.power_manager import cancel_scheduled_shutdown
-        if cancel_scheduled_shutdown():
-            await query.edit_message_text(
-                "✅ Zamanlı kapatma/yeniden başlatma iptal edildi.",
-                reply_markup=power_menu_keyboard(),
-            )
-        else:
-            await query.edit_message_text(
-                "ℹ️ Aktif bir zamanlayıcı bulunamadı.",
-                reply_markup=power_menu_keyboard(),
-            )
+        result = await _agent_cb(query, "cancel_shutdown", {})
+        if result:
+            await query.edit_message_text(result["data"], reply_markup=power_menu_keyboard())
 
     elif data == "power_status":
-        from core.power_manager import get_shutdown_status
-        from utils.helpers import format_seconds
-        status = get_shutdown_status()
-        if status:
-            action_label = "Kapatma" if status["action"] == "shutdown" else "Yeniden başlatma"
-            await query.edit_message_text(
-                f"⏱️ *Aktif Zamanlayıcı*\n"
-                f"İşlem: {action_label}\n"
-                f"Kalan süre: `{format_seconds(status['remaining'])}`",
-                parse_mode="Markdown",
-                reply_markup=power_menu_keyboard(),
-            )
-        else:
-            await query.edit_message_text(
-                "ℹ️ Aktif zamanlayıcı yok.",
-                reply_markup=power_menu_keyboard(),
-            )
+        result = await _agent_cb(query, "shutdown_status", {})
+        if result:
+            from utils.helpers import format_seconds
+            status = result["data"]
+            if status:
+                action_label = "Kapatma" if status["action"] == "shutdown" else "Yeniden başlatma"
+                await query.edit_message_text(
+                    f"⏱️ *Aktif Zamanlayıcı*\nİşlem: {action_label}\nKalan süre: `{format_seconds(status['remaining'])}`",
+                    parse_mode="Markdown", reply_markup=power_menu_keyboard(),
+                )
+            else:
+                await query.edit_message_text("ℹ️ Aktif zamanlayıcı yok.", reply_markup=power_menu_keyboard())
 
     # ── Onay mekanizması ─────────────────────────────────────────────────
     elif data.startswith("confirm_yes_"):
@@ -379,53 +373,44 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def _handle_confirmation(query, user, context, action: str, chat_id: int) -> None:
-    from core.power_manager import (
-        immediate_shutdown, immediate_restart, sleep_pc, hibernate_pc,
-        schedule_shutdown,
-    )
-    from core.process_manager import kill_process
     from utils.security import get_pending_confirmation, clear_pending_confirmation
-
     pending = get_pending_confirmation(user.id)
     clear_pending_confirmation(user.id)
 
-    async def notify_user(msg: str):
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
-
     if action == "shutdown_now":
         await query.edit_message_text("🔴 PC kapatılıyor...")
-        immediate_shutdown()
+        await _agent_cb(query, "shutdown", {"delay": 0})
 
     elif action == "restart_now":
         await query.edit_message_text("🔁 PC yeniden başlatılıyor...")
-        immediate_restart()
+        await _agent_cb(query, "restart", {"delay": 0})
 
     elif action == "sleep_now":
         await query.edit_message_text("😴 PC uyku moduna alınıyor...")
-        sleep_pc()
+        await _agent_cb(query, "sleep", {})
 
     elif action == "hibernate_now":
         await query.edit_message_text("💤 PC hazırda beklemeye alınıyor...")
-        hibernate_pc()
+        await _agent_cb(query, "hibernate", {})
 
     elif action.startswith("shutdown_timed_"):
         parts = action.split("_")
         delay = int(parts[-1])
-        action_type = parts[-2]  # "shutdown" or "restart"
+        action_type = parts[-2]
         from utils.helpers import format_seconds
         label = "kapatma" if action_type == "shutdown" else "yeniden başlatma"
-        await query.edit_message_text(
-            f"✅ {format_seconds(delay)} içinde {label} zamanlandı."
-        )
-        await schedule_shutdown(action_type, delay, notify_user)
+        result = await _agent_cb(query, action_type, {"delay": delay})
+        if result:
+            await query.edit_message_text(f"✅ {format_seconds(delay)} içinde {label} zamanlandı.")
 
     elif action == "kill_process":
         if pending and "pid" in pending["data"]:
             pid = pending["data"]["pid"]
             await query.edit_message_text(f"🔄 PID {pid} kapatılıyor...")
-            success, msg = kill_process(pid)
-            from bot.keyboards import back_to_menu_keyboard
-            await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+            result = await _agent_cb(query, "kill_process", {"identifier": pid})
+            if result:
+                from bot.keyboards import back_to_menu_keyboard
+                await query.edit_message_text(result["data"], parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
         else:
             await query.edit_message_text("❌ Süreç bilgisi bulunamadı.")
 
