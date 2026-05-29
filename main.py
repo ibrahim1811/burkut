@@ -175,8 +175,8 @@ async def post_init(app: Application) -> None:
             except Exception as e:
                 logger.warning(f"Owner bildirimi gönderilemedi (ID: {uid}): {e}")
 
-    # Başlangıç kamera fotoğrafı
-    if cfg.get("startup_webcam_photo", True) and owner_ids:
+    # Başlangıç kamera fotoğrafı — local ortamda pc_agent.py halleder, Render'da webcam yok
+    if not _os.environ.get("PORT") and cfg.get("startup_webcam_photo", True) and owner_ids:
         try:
             from core.media_manager import take_webcam_photo
             from core.offline_queue import is_online, enqueue_photo

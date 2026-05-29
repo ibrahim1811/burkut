@@ -158,6 +158,34 @@ def execute(cmd: dict) -> None:
         send_result(cmd_id, False, error=str(e))
 
 
+# ── Startup bildirimi ─────────────────────────────────────────────────────────
+
+def _send_startup_photo() -> None:
+    """PC açılışında webcam fotoğrafı Telegram'a gönder."""
+    token = os.environ.get("BOT_TOKEN", "") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    owner = os.environ.get("OWNER_ID", "") or os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not token or not owner:
+        _log("Startup fotoğrafı atlandı: BOT_TOKEN veya OWNER_ID eksik")
+        return
+    try:
+        from core.media_manager import take_webcam_photo
+        buf = take_webcam_photo()
+        for cid in [c.strip() for c in owner.split(",") if c.strip()]:
+            buf.seek(0)
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{token}/sendPhoto",
+                    data={"chat_id": cid, "caption": "👁️ PC açıldı — webcam görüntüsü"},
+                    files={"photo": ("webcam.jpg", buf, "image/jpeg")},
+                    timeout=15,
+                )
+                _log(f"Startup fotoğrafı gönderildi → {cid}")
+            except Exception as e:
+                _log(f"Fotoğraf gönderilemedi ({cid}): {e}")
+    except Exception as e:
+        _log(f"Webcam fotoğrafı alınamadı: {e}")
+
+
 # ── Widget ve ses asistanı başlatıcılar ───────────────────────────────────────
 
 def _start_widget() -> None:
@@ -190,6 +218,7 @@ def main() -> None:
 
     _log(f"Render bağlantısı: {RENDER_URL}")
 
+    _send_startup_photo()
     _start_widget()
     _start_voice()
 
