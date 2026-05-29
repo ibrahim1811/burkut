@@ -35,6 +35,8 @@ from bot.messages import BOT_STARTED
 
 logger = setup_logger()
 
+_last_startup_notify: float = 0.0  # spam koruması
+
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     from telegram.error import Conflict, NetworkError, TimedOut
@@ -155,9 +157,14 @@ def register_handlers(app: Application) -> None:
 
 async def post_init(app: Application) -> None:
     """Bot başladıktan sonra owner'a bildirim ve kamera fotoğrafı gönder."""
+    global _last_startup_notify
     cfg = get_config()
     owner_ids = cfg.get("authorized_users", [])
-    if owner_ids:
+
+    # Son bildirimden 5 dakika geçmediyse tekrar gönderme
+    now = time.time()
+    if now - _last_startup_notify > 300 and owner_ids:
+        _last_startup_notify = now
         for uid in owner_ids:
             try:
                 await app.bot.send_message(
