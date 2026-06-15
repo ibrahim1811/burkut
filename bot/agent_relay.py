@@ -40,7 +40,7 @@ async def send_to_agent(action: str, params: dict, timeout: float = 15.0) -> dic
         return None
     cmd_id = str(uuid.uuid4())
     _cmd_queue.put({"id": cmd_id, "action": action, "params": params})
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
         await asyncio.sleep(0.3)

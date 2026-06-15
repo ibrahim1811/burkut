@@ -1431,7 +1431,8 @@ async def cmd_kod_analiz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 @authorized_only
 async def handle_document_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Gönderilen metin/kod dosyalarını AI'ya analiz ettir (mevcut handle_document ile birlikte çalışır)."""
+    """Kod/metin dosyalarını AI'ya analiz ettir. Diğer dosyalar group=1'deki handle_document'e geçer."""
+    from telegram.ext import ApplicationHandlerStop
     doc = update.message.document
     # Sadece metin/kod uzantıları için AI analizi yap
     code_extensions = {
@@ -1441,7 +1442,7 @@ async def handle_document_ai(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }
     ext = Path(doc.file_name).suffix.lower()
     if ext not in code_extensions:
-        return  # Diğer dosyalar için mevcut handler devam eder
+        return  # group=1'deki handle_document devam eder
 
     user = update.effective_user
     caption = update.message.caption or ""
@@ -1479,3 +1480,5 @@ async def handle_document_ai(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     await _send_ai_response(update, context, thinking_msg, text_resp, action_results, images)
+    # Kod dosyası işlendi — group=1'deki handle_document'in tekrar çalışmasını engelle
+    raise ApplicationHandlerStop

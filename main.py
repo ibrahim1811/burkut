@@ -139,12 +139,17 @@ def register_handlers(app: Application) -> None:
     # Callback query handler (inline keyboard)
     app.add_handler(CallbackQueryHandler(callbacks.callback_handler))
 
-    # Belge/dosya gönderme handler — önce AI kod analizi, sonra normal handler
+    # Belge/dosya gönderme:
+    #   group 0 → handle_document_ai: kod/metin dosyasıysa AI analizi yapar ve durur
+    #   group 1 → handle_document: diğer dosyalar için kayıt yeri sorar
+    # PTB'de aynı group içinde sadece ilk eşleşen handler çalışır;
+    # farklı group'lar ise sırayla çalışır — handle_document_ai kod dosyasını
+    # işlediğinde ApplicationHandlerStop fırlatarak group 1'i engeller.
     app.add_handler(
-        MessageHandler(filters.Document.ALL, handlers.handle_document_ai)
+        MessageHandler(filters.Document.ALL, handlers.handle_document_ai), group=0
     )
     app.add_handler(
-        MessageHandler(filters.Document.ALL, handlers.handle_document)
+        MessageHandler(filters.Document.ALL, handlers.handle_document), group=1
     )
 
     # Düz metin → Bürküt AI (komut dışı mesajlar)
@@ -329,7 +334,7 @@ def _start_offline_queue_watcher(app: Application) -> None:
     """Offline kuyruk izleyicisini bot event loop'unda başlatır."""
     try:
         from core.offline_queue import start_queue_watcher
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.create_task(start_queue_watcher(app.bot))
         logger.info("Offline kuyruk izleyicisi başlatıldı.")
     except Exception as e:

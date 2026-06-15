@@ -4,7 +4,7 @@ WELCOME = (
     "Telegram'dan tam PC kontrolü + Yapay Zeka!\n\n"
     "🤖 *Doğrudan mesaj yaz* → Bürküt AI yanıtlar\n\n"
     "📋 Kategoriler:\n"
-    "  🧠 AI Asistan (Ollama/codellama)\n"
+    "  🧠 AI Asistan (Groq / llama-3.3-70b)\n"
     "  🖥️ Sistem izleme ve durum\n"
     "  ⚡ Güç yönetimi (kapat/başlat/uyut)\n"
     "  🔄 Süreç ve program kontrolü\n"
