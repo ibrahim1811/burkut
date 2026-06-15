@@ -300,6 +300,32 @@ def _cmd_clipboard_set(params: dict) -> tuple[bool, object]:
     return True, "✅ Panoya yazıldı."
 
 
+def _cmd_run_claude(params: dict) -> tuple[bool, object]:
+    import subprocess
+    prompt = params.get("prompt", "").strip()
+    cwd = params.get("cwd", str(BASE_DIR))
+    if not prompt:
+        return False, "Prompt boş."
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", prompt, "--dangerously-skip-permissions"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=300,
+            encoding="utf-8",
+            errors="replace",
+        )
+        output = (proc.stdout or "").strip() or (proc.stderr or "").strip() or "(çıktı yok)"
+        return True, output
+    except subprocess.TimeoutExpired:
+        return False, "⏰ Claude Code 5 dakika içinde tamamlayamadı."
+    except FileNotFoundError:
+        return False, "❌ `claude` komutu bulunamadı. Claude Code kurulu mu?"
+    except Exception as e:
+        return False, str(e)
+
+
 _HANDLERS = {
     # Mevcut
     "screenshot":    _cmd_screenshot,
@@ -338,6 +364,7 @@ _HANDLERS = {
     "focus_window":    _cmd_focus_window_fn,
     "clipboard_get":   _cmd_clipboard_get,
     "clipboard_set":   _cmd_clipboard_set,
+    "run_claude":      _cmd_run_claude,
 }
 
 

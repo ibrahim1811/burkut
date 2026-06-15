@@ -40,10 +40,15 @@ _last_startup_notify: float = 0.0  # spam koruması
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     from telegram.error import Conflict, NetworkError, TimedOut
+    import os as _os_err
     if isinstance(context.error, Conflict):
-        logger.warning("Telegram Conflict: Başka bir instance aktif. 30sn sonra tekrar denenecek...")
-        await asyncio.sleep(30)
-        return
+        logger.error(
+            "Telegram Conflict: Aynı token'la başka bir instance aktif! "
+            "Render'da yeniden başlatılıyor — local'de main.py çalıştırmayın, "
+            "sadece local/pc_agent.py çalıştırın."
+        )
+        # Süreci tamamen durdur; Render otomatik yeniden başlatır ve tek instance kalır.
+        _os_err._exit(1)
     if isinstance(context.error, (NetworkError, TimedOut)):
         logger.warning(f"Ağ hatası (geçici): {context.error}")
         return
@@ -117,6 +122,9 @@ def register_handlers(app: Application) -> None:
 
     # Ses asistanı
     app.add_handler(CommandHandler("asistan", handlers.cmd_voice_status))
+
+    # Claude Code uzaktan tetikleme
+    app.add_handler(CommandHandler("yap", handlers.cmd_yap))
 
     # ── AI / Bürküt komutları ─────────────────────────────────────────────────
     app.add_handler(CommandHandler("burkut", handlers.cmd_burkut))

@@ -19,7 +19,7 @@ class VoiceIndicator(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(2)
 
-        self._status = QLabel("🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış")
+        self._status = QLabel('🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış')
         self._status.setAlignment(Qt.AlignCenter)
         self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
         layout.addWidget(self._status)
@@ -42,7 +42,7 @@ class VoiceIndicator(QWidget):
             self._transcript.setText(text)
         elif action == "done":
             self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
-            self._status.setText("🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış")
+            self._status.setText('🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış')
         elif action == "error":
             self._status.setStyleSheet("color: #e74c3c; font-size: 11px;")
             self._status.setText("❌ Hata")
@@ -50,11 +50,11 @@ class VoiceIndicator(QWidget):
             QTimer.singleShot(3000, self._reset)
         elif action in ("loading", "ready"):
             self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
-            self._status.setText("🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış")
+            self._status.setText('🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış')
 
     def _reset(self):
         self._status.setStyleSheet("color: #8b949e; font-size: 11px;")
-        self._status.setText("🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış")
+        self._status.setText('🎙️ "Bürküt" de  •  Ctrl+Space  •  Çift alkış')
         self._transcript.setText("")
 
     def notify(self, action: str, text: str = ""):

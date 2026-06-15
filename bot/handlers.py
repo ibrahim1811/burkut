@@ -1006,6 +1006,46 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(result["data"], parse_mode="Markdown")
 
 
+# ── Claude Code uzaktan tetikleme ────────────────────────────────────────────
+@authorized_only
+async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/yap [görev] — PC'deki Claude Code'u çalıştır."""
+    user = update.effective_user
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Kullanım: `/yap [görev]`\n\n"
+            "Örnekler:\n"
+            "• `/yap bug fix yap ve pushla`\n"
+            "• `/yap requirements.txt güncelle`\n"
+            "• `/yap testleri çalıştır ve hataları düzelt`",
+            parse_mode="Markdown",
+        )
+        return
+
+    prompt = " ".join(context.args)
+    log_command(user.id, user.username or "unknown", f"/yap {prompt[:60]}")
+
+    msg = await update.message.reply_text(
+        f"🤖 Claude Code çalışıyor...\n\n`{prompt[:200]}`",
+        parse_mode="Markdown",
+    )
+
+    result = await _agent_cmd(update, "run_claude", {"prompt": prompt}, timeout=330.0)
+    if result:
+        output = result["data"]
+        chunks = [output[i:i+3800] for i in range(0, max(len(output), 1), 3800)]
+        header = f"🤖 *Claude Code tamamladı*\n\n"
+        try:
+            await msg.edit_text(header + f"```\n{chunks[0]}\n```", parse_mode="Markdown")
+        except Exception:
+            await msg.edit_text(header + chunks[0])
+        for chunk in chunks[1:]:
+            try:
+                await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
+            except Exception:
+                await update.message.reply_text(chunk)
+
+
 # ── Ses asistanı durumu ───────────────────────────────────────────────────────
 @authorized_only
 async def cmd_voice_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
