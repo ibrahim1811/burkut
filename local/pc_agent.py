@@ -479,6 +479,13 @@ def main() -> None:
     _start_widget()
     _start_voice()
 
+    try:
+        from voice.text_to_speech import speak as _tts_speak
+        from ai.calendar_mgr import set_tts_callback
+        set_tts_callback(_tts_speak)
+    except Exception:
+        pass
+
     _log("Komut polling başladı...")
     while True:
         cmd = poll()

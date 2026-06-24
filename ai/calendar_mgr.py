@@ -12,6 +12,7 @@ from utils.logger import get_logger
 logger = get_logger()
 
 _notify_callback: Optional[Callable] = None
+_tts_callback: Optional[Callable] = None
 _checker_running: bool = False
 
 
@@ -19,6 +20,12 @@ def set_notify_callback(callback: Callable) -> None:
     """bot → burası: (chat_id, text) alır ve Telegram'a gönderir."""
     global _notify_callback
     _notify_callback = callback
+
+
+def set_tts_callback(callback: Callable) -> None:
+    """Sesli uyarı için TTS callback — voice_assistant tarafından atanır."""
+    global _tts_callback
+    _tts_callback = callback
 
 
 async def _check_loop() -> None:
@@ -42,6 +49,16 @@ async def _check_loop() -> None:
                 else:
                     sent = True  # callback yok, yine de tamamlandı say
                 if sent:
+                    if _tts_callback:
+                        try:
+                            _tts_callback(f"Efendim, hatırlatmanız var: {rem['text']}")
+                        except Exception as e:
+                            logger.error(f"TTS hatırlatma hatası: {e}")
+                    try:
+                        from core.notifier import show_overlay
+                        show_overlay(f"⏰ Hatırlatma!\n{rem['text']}", duration=10)
+                    except Exception as e:
+                        logger.error(f"Overlay hatırlatma hatası: {e}")
                     mark_reminder_done(rem["id"])
         except Exception as e:
             logger.error(f"Hatırlatıcı kontrol hatası: {e}")
