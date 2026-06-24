@@ -104,6 +104,23 @@ def _cmd_type_text(params: dict) -> tuple[bool, object]:
     return True, None
 
 
+def _cmd_press_key(params: dict) -> tuple[bool, object]:
+    from core.keyboard_mouse import press_key, hotkey
+    keys_raw = params.get("keys", "").strip().lower()
+    if not keys_raw:
+        return False, "Tuş belirtilmedi."
+    # "ctrl+c" → ["ctrl","c"]  |  "enter" → ["enter"]
+    keys = [k.strip() for k in keys_raw.replace("+", " ").split() if k.strip()]
+    if not keys:
+        return False, "Geçersiz tuş."
+    if len(keys) == 1:
+        press_key(keys[0])
+    else:
+        hotkey(*keys)
+    label = "+".join(keys).upper()
+    return True, f"✅ `{label}` tuşuna basıldı."
+
+
 def _cmd_open_app(params: dict) -> tuple[bool, object]:
     from core.process_manager import start_process
     ok_flag, msg = start_process(params["app"])
@@ -301,29 +318,36 @@ def _cmd_clipboard_set(params: dict) -> tuple[bool, object]:
 
 
 def _cmd_run_claude(params: dict) -> tuple[bool, object]:
-    import subprocess
+    import os, groq
+    from dotenv import load_dotenv
+    load_dotenv()
     prompt = params.get("prompt", "").strip()
-    cwd = params.get("cwd", str(BASE_DIR))
     if not prompt:
         return False, "Prompt boş."
     try:
-        proc = subprocess.run(
-            ["claude", "-p", prompt, "--dangerously-skip-permissions"],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            timeout=300,
-            encoding="utf-8",
-            errors="replace",
+        client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "Sen Bürküt'sün. Kayra'nın kişisel yapay zeka asistanısın. Türkçe yanıt ver."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=4096,
         )
-        output = (proc.stdout or "").strip() or (proc.stderr or "").strip() or "(çıktı yok)"
+        output = completion.choices[0].message.content.strip() or "(çıktı yok)"
         return True, output
-    except subprocess.TimeoutExpired:
-        return False, "⏰ Claude Code 5 dakika içinde tamamlayamadı."
-    except FileNotFoundError:
-        return False, "❌ `claude` komutu bulunamadı. Claude Code kurulu mu?"
     except Exception as e:
         return False, str(e)
+
+
+def _cmd_show_notification(params: dict) -> tuple[bool, object]:
+    from core.notifier import show_overlay
+    text = params.get("text", "").strip()
+    duration = int(params.get("duration", 8))
+    if not text:
+        return False, "Mesaj boş."
+    show_overlay(text, duration=duration)
+    return True, "Bildirim gösterildi."
 
 
 _HANDLERS = {
@@ -365,6 +389,8 @@ _HANDLERS = {
     "clipboard_get":   _cmd_clipboard_get,
     "clipboard_set":   _cmd_clipboard_set,
     "run_claude":      _cmd_run_claude,
+    "press_key":          _cmd_press_key,
+    "show_notification":  _cmd_show_notification,
 }
 
 

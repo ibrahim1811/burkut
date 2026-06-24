@@ -983,6 +983,31 @@ async def cmd_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"⌨️ Yazıldı: `{text[:100]}`", parse_mode="Markdown")
 
 
+@authorized_only
+async def cmd_press_key(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Kullanım: `/tus [tuş]`\n\n"
+            "Örnekler:\n"
+            "• `/tus enter`\n"
+            "• `/tus escape`\n"
+            "• `/tus tab`\n"
+            "• `/tus ctrl+c`\n"
+            "• `/tus ctrl+z`\n"
+            "• `/tus alt+f4`\n"
+            "• `/tus win`\n"
+            "• `/tus f5`",
+            parse_mode="Markdown",
+        )
+        return
+    keys = " ".join(context.args)
+    log_command(user.id, user.username or "unknown", f"/tus {keys}")
+    result = await _agent_cmd(update, "press_key", {"keys": keys})
+    if result:
+        await update.message.reply_text(result["data"], parse_mode="Markdown")
+
+
 # ── Launcher ──────────────────────────────────────────────────────────────────
 @authorized_only
 async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1009,7 +1034,7 @@ async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ── Claude Code uzaktan tetikleme ────────────────────────────────────────────
 @authorized_only
 async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/yap [görev] — PC'deki Claude Code'u çalıştır."""
+    """/yap [görev] — PC'deki Bürküt'ü çalıştır."""
     user = update.effective_user
     if not context.args:
         await update.message.reply_text(
@@ -1022,19 +1047,46 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    import asyncio as _asyncio
+    from bot.agent_relay import agent_is_online, send_to_agent
+
     prompt = " ".join(context.args)
     log_command(user.id, user.username or "unknown", f"/yap {prompt[:60]}")
 
     msg = await update.message.reply_text(
-        f"🤖 Claude Code çalışıyor...\n\n`{prompt[:200]}`",
+        f"🦅 Bürküt çalışıyor...\n\n`{prompt[:200]}`",
         parse_mode="Markdown",
     )
 
-    result = await _agent_cmd(update, "run_claude", {"prompt": prompt}, timeout=330.0)
+    # Agent offline ise en fazla 20s bekle (Render yeni açıldıysa ilk poll'ü bekle)
+    if not agent_is_online():
+        try:
+            await msg.edit_text(f"⏳ PC agent bekleniyor...\n\n`{prompt[:200]}`", parse_mode="Markdown")
+        except Exception:
+            pass
+        for _ in range(10):
+            await _asyncio.sleep(2)
+            if agent_is_online():
+                try:
+                    await msg.edit_text(
+                        f"🦅 Bürküt çalışıyor...\n\n`{prompt[:200]}`", parse_mode="Markdown"
+                    )
+                except Exception:
+                    pass
+                break
+        else:
+            await msg.edit_text(
+                "🔌 *PC agent çevrimdışı*\n\n"
+                "PC'de `basla.vbs` veya `python local/pc_agent.py` ile agent'ı başlatın.",
+                parse_mode="Markdown",
+            )
+            return
+
+    result = await send_to_agent("run_claude", {"prompt": prompt}, timeout=330.0)
     if result:
         output = result["data"]
         chunks = [output[i:i+3800] for i in range(0, max(len(output), 1), 3800)]
-        header = f"🤖 *Claude Code tamamladı*\n\n"
+        header = "🦅 *Bürküt tamamladı*\n\n"
         try:
             await msg.edit_text(header + f"```\n{chunks[0]}\n```", parse_mode="Markdown")
         except Exception:
@@ -1044,6 +1096,29 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await update.message.reply_text(f"```\n{chunk}\n```", parse_mode="Markdown")
             except Exception:
                 await update.message.reply_text(chunk)
+    else:
+        await msg.edit_text("⏰ PC agent yanıt vermedi — Bürküt tamamlayamadı.")
+
+
+
+# ── PC ekran bildirimi ────────────────────────────────────────────────────────
+@authorized_only
+async def cmd_bildirim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/bildirim [mesaj] — PC ekranında overlay bildirim göster."""
+    from bot.agent_relay import send_to_agent
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Kullanım: `/bildirim [mesaj]`\nÖrnek: `/bildirim Toplantı 5 dk sonra!`",
+            parse_mode="Markdown",
+        )
+        return
+    text = " ".join(context.args)
+    result = await send_to_agent("show_notification", {"text": text}, timeout=10.0)
+    if result and result.get("ok"):
+        await update.message.reply_text("✅ Bildirim gönderildi.")
+    else:
+        err = result.get("data", "PC agent çevrimiçi değil.") if result else "PC agent çevrimiçi değil."
+        await update.message.reply_text(f"❌ {err}")
 
 
 # ── Ses asistanı durumu ───────────────────────────────────────────────────────

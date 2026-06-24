@@ -116,6 +116,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("fare", handlers.cmd_mouse_move))
     app.add_handler(CommandHandler("tikla", handlers.cmd_click))
     app.add_handler(CommandHandler("yaz", handlers.cmd_type))
+    app.add_handler(CommandHandler("tus", handlers.cmd_press_key))
 
     # Launcher
     app.add_handler(CommandHandler("ac", handlers.cmd_open))
@@ -125,6 +126,9 @@ def register_handlers(app: Application) -> None:
 
     # Claude Code uzaktan tetikleme
     app.add_handler(CommandHandler("yap", handlers.cmd_yap))
+
+    # PC ekran bildirimi
+    app.add_handler(CommandHandler("bildirim", handlers.cmd_bildirim))
 
     # ── AI / Bürküt komutları ─────────────────────────────────────────────────
     app.add_handler(CommandHandler("burkut", handlers.cmd_burkut))
