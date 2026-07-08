@@ -14,22 +14,31 @@
 │  FastAPI (yerel :8765, token auth, REST + WebSocket)         │
 │  Flask Relay (Render, /agent/poll · /agent/result)           │
 ├─────────────────────────────────────────────────────────────┤
+│                     EVENT BUS (Faz 1)                        │
+│  core/events.py — pub/sub · PC_BOOTED · COMMAND_RECEIVED ·   │
+│  TOOL_EXECUTED · MEMORY_ADDED · REMINDER_DUE · AI_RESPONSE   │
+│  (saf stdlib → Render'da da import güvenli)                  │
+├─────────────────────────────────────────────────────────────┤
 │                        CORE AI                               │
-│  BurkutBrain (Groq) · Model Router (Faz 2a: Groq/Ollama/     │
-│  Claude/GPT opsiyonel) · <EYLEM>{json}</EYLEM> protokolü     │
+│  BurkutBrain (Groq) · Tool Dispatcher (ai/tools, Faz 1) ·    │
+│  Model Router (Faz 4.1) · planner/executor (Faz 4) ·         │
+│  prompts/ kişilik dosyaları · <EYLEM>{json}</EYLEM>          │
 ├─────────────────────────────────────────────────────────────┤
 │                     MEMORY ENGINE                            │
 │  SQLite + FTS5 + embedding (MiniLM) · hybrid search ·        │
 │  ranking · context builder (RAG)                             │
 ├─────────────────────────────────────────────────────────────┤
-│              AUTOMATION (Faz 2b) · VISION (Faz 3a)           │
-│  trigger/condition/action kuralları · OCR + ekran analizi    │
+│   SCHEDULER (Faz 4.2) · AUTOMATION (Faz 4.2) · VISION (5.1)  │
+│  zaman tabanlı görevler · olay/koşul/eylem kuralları ·       │
+│  OCR + ekran analizi (Automation, Scheduler'ı ve Event       │
+│  Bus'ı tetikleyici olarak kullanır)                          │
 ├─────────────────────────────────────────────────────────────┤
-│                    DEVICE MANAGER (core/)                    │
+│          DEVICE MANAGER (core/) + DEVICE REGISTRY (DB)       │
 │  sistem · süreç · güç · dosya · pencere · pano · ses ·       │
-│  parlaklık · klavye/fare · kamera · bildirim                 │
+│  parlaklık · klavye/fare · kamera · bildirim · devices       │
+│  tablosu (PC/telefon/ESP32/Arduino envanteri)                │
 ├─────────────────────────────────────────────────────────────┤
-│              PLUGIN SYSTEM (Faz 3b) · DESKTOP AGENT          │
+│              PLUGIN SYSTEM (Faz 6) · DESKTOP AGENT           │
 │  manifest + hook API · local/pc_agent.py (poll + yürütme)    │
 ├─────────────────────────────────────────────────────────────┤
 │                        DATABASE                              │
@@ -101,6 +110,32 @@ Her sohbet turu → brain yanıtı + yan çıktı olarak "anı adayı"
   → arkaplan thread'de lazy batch embed
 ```
 
+### 3.5 Event Bus (yeni, Faz 1) — "birbirini çağıran modüller" yerine olay akışı
+```
+core → events → diğer modüller
+
+Örnek: PC_BOOTED
+pc_agent.py başlar → bus.emit(PC_BOOTED)
+  ├→ Dashboard (WS /ws/events) canlı güncellenir
+  ├→ Automation (Faz 4.2) açılış kuralları tetiklenir
+  ├→ Memory Engine olayı kaydeder
+  └→ Telegram'a bildirim gider
+```
+Modüller birbirini doğrudan çağırmak yerine olay yayınlar; dinleyen dinler.
+`core/events.py` saf stdlib olduğundan Render'da da güvenle import edilir —
+ama dinleyicilerin donanım işi yapanları yalnızca yerel PC'de abone olur.
+
+### 3.6 Tool Calling (yeni, Faz 1) — AI asla doğrudan Windows API çağırmaz
+```
+AI (Groq yanıtı) → Tool Dispatcher (ai/tools/dispatcher.py)
+  → @tool registry'den fonksiyon bulunur
+  → tool (open_program, volume_set, ...) → core/* → Windows
+  → sonuç + audit_log kaydı + TOOL_EXECUTED olayı
+```
+İlk tool'lar: `open_program`, `open_url`, `close_program`, `volume_set`, `volume_mute`.
+`brain.py`'daki `<EYLEM>` handler'ları Faz 2'de kademeli olarak dispatcher'a taşınır.
+Kazanım: tek yetki/audit noktası (güvenlik) + yeni yetenek = tek dosya (genişletilebilirlik).
+
 ## 4. Mevcut vs. Hedef
 
 | Boyut | Mevcut (PcBot) | Hedef (Bürküt OS) |
@@ -121,7 +156,7 @@ Her sohbet turu → brain yanıtı + yan çıktı olarak "anı adayı"
 |---|---|
 | `bot/` | Telegram komut/callback işleme, agent_relay kuyruk köprüsü |
 | `core/` | Windows donanım/OS kontrolü: sistem bilgisi, süreç, güç, dosya, pencere, pano, ses, parlaklık, klavye/fare, kamera, overlay bildirim, offline kuyruk |
-| `ai/` | BurkutBrain (Groq + EYLEM ayrıştırma), memory.py (*adapter'a dönüşür), calendar_mgr, news_weather, web_reader |
+| `ai/` | BurkutBrain (Groq + EYLEM ayrıştırma), memory.py (*adapter'a dönüşür), prompts/ (kişilik: system_prompt.md + conversation_rules.md + memory_rules.md — `_load_system_prompt()` dosyadan yükler), tools/ (dispatcher + tool'lar), calendar_mgr, news_weather, web_reader |
 | `voice/` | Wake-word (Vosk), STT (Groq Whisper), TTS (edge-tts), hotkey, NLU |
 | `widget/` | PySide6 masaüstü overlay, tray, canlı stats, AI sohbet penceresi |
 | `local/` | pc_agent.py: relay poll döngüsü + komut yürütme (+ Faz 1'de FastAPI thread başlatma) |
@@ -131,13 +166,31 @@ Her sohbet turu → brain yanıtı + yan çıktı olarak "anı adayı"
 ### Planlanan
 | Modül | Faz | Sorumluluk |
 |---|---|---|
-| `server/` | 1 | FastAPI app, auth middleware, REST route'ları, WebSocket metrik push, dashboard static mount |
-| `memory/` | 2 | store (SQLite+FTS5), embedder (MiniLM, kill-switch), search (hybrid), ranker, context_builder |
-| `dashboard/` | 3 | React + Vite + Tailwind SPA; Sistem/Bellek/Sohbet/Hatırlatıcı sayfaları |
+| `core/events.py` | 1 ✅ | Event Bus: pub/sub, olay geçmişi (deque 200), standart olay adları; saf stdlib |
+| `ai/tools/` | 1 ✅ | Tool Dispatcher (@tool registry, dispatch → audit + TOOL_EXECUTED) + ilk tool'lar |
+| `ai/prompts/` | 1 ✅ | Kişilik dosyaları: system_prompt.md, conversation_rules.md, memory_rules.md |
+| `server/` | 1 | FastAPI app, auth middleware, REST route'ları, WS metrik + olay push, dashboard static mount |
+| `memory/` | 2 | store (SQLite+FTS5+devices), embedder (MiniLM, kill-switch), search (hybrid), ranker, context_builder |
+| `dashboard/` | 3 | React + Vite + Tailwind SPA; MVP: System/Memory Timeline/AI Chat/Tasks — hedef: 9 bölümlü OS paneli |
 | `ai/router.py` | 4.1 | Görev tipine göre model seçimi, maliyet sayacı, fallback zinciri |
-| `automation/` | 4.2 | Trigger/condition/action motoru; kurallar DB'de, editör dashboard'da |
-| `vision/` | 4.3 | RapidOCR + screenshot analizi, UI element tespiti |
-| `plugins/` | 4.4 | Manifest + Python entrypoint sözleşmesi; EYLEM uzayına ve dashboard'a kayıt |
+| `scheduler/` | 4.2 | Zaman tabanlı görevler (09:00 görev oku, 22:00 backup); Automation'dan ayrı modül |
+| `automation/` | 4.2 | Olay/koşul/eylem motoru; tetikleyiciler: Event Bus + Scheduler; kurallar DB'de, editör dashboard'da |
+| `ai/planner.py` + `ai/executor.py` | 4 | Çok adımlı görev planlama/yürütme ("VSCode aç, projeyi tara, bug bul, GitHub issue oluştur") |
+| `vision/` | 5.1 | RapidOCR + screenshot analizi, UI element tespiti |
+| `plugins/` | 6 | Manifest + Python entrypoint sözleşmesi; EYLEM uzayına ve dashboard'a kayıt |
+
+**Hedef AI Core yapısı** (brain.py tek dosya olarak büyütülmez):
+```
+ai/
+  router.py        # model seçimi (Faz 4.1)
+  planner.py       # çok adımlı görev planlama (Faz 4)
+  executor.py      # plan adımlarını tool'larla yürütme (Faz 4)
+  memory.py        # adapter → memory/ paketi
+  context.py       # bağlam derleme (Faz 2'de memory/context_builder ile başlar)
+  conversation.py  # oturum/diyalog yönetimi
+  prompts/         # kişilik (Faz 1 ✅)
+  tools/           # tool dispatcher + tool'lar (Faz 1 ✅)
+```
 
 ## 6. Mimari İlkeler
 
@@ -146,3 +199,5 @@ Her sohbet turu → brain yanıtı + yan çıktı olarak "anı adayı"
 3. **Yerel öncelik:** Donanım verisi ve bellek asla Render'a gitmez; Render yalnızca Telegram köprüsü.
 4. **Tek yazıcı:** SQLite WAL modu + yazma işlemleri tek kuyruk üzerinden (bot thread + FastAPI + widget eşzamanlılığı).
 5. **Kademeli bozulma:** embedding yoksa FTS-only arama; Groq erişilemezse (Faz 4.1 sonrası) Ollama fallback; internet yoksa offline kuyruk.
+6. **Olay güdümlü gevşek bağlılık:** modüller birbirini doğrudan çağırmak yerine Event Bus üzerinden haberleşir; yeni modül eklemek = olaya abone olmak.
+7. **Tek eylem kapısı:** AI'nin tüm PC eylemleri Tool Dispatcher'dan geçer — yetki kontrolü, audit ve rate-limit tek noktada.

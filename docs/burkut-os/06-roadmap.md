@@ -7,16 +7,17 @@
 | Faz | Kapsam | Tahmin | Sürüm |
 |---|---|---|---|
 | **0 — Dokümantasyon** | PRD + 8 teknik doküman (`docs/burkut-os/`), jarvis-v2 superseded | ~1 hafta | v0.1 |
-| **1 — Güvenlik + Temel** | Sır temizliği + rotasyon, `server/` FastAPI (:8765), SQLite şema, memory.json migrasyonu | ~1 hafta | v0.1 |
-| **2 — Memory Engine** | `memory/` paketi: FTS5 + embedding hybrid arama, ranking, context builder, brain entegrasyonu | ~2 hafta | v0.2 |
-| **3 — Dashboard** | React + Vite + Tailwind; Sistem/Bellek/Sohbet/Hatırlatıcı; WebSocket canlı veri | ~2 hafta | v0.3 (MVP) |
+| **1 — Güvenlik + Temel** | Sır temizliği + rotasyon, `server/` FastAPI (:8765), SQLite şema (+ `devices` tablosu), memory.json migrasyonu, **Event Bus** (`core/events.py`), **Tool Dispatcher** (`ai/tools/`), **AI kişilik dosyaları** (`ai/prompts/`) | ~1 hafta | v0.1 |
+| **2 — Memory Engine** | `memory/` paketi: FTS5 + embedding hybrid arama, ranking, context builder, brain entegrasyonu; `<EYLEM>` handler'larının dispatcher'a kademeli taşınması | ~2 hafta | v0.2 |
+| **3 — Dashboard** | React + Vite + Tailwind; MVP sayfaları: System, Memory Timeline, AI Chat, Tasks/Reminders; WebSocket canlı veri + olay akışı | ~2 hafta | v0.3 (MVP) |
 | **4.1 — Model Router** | `ai/router.py`: Groq varsayılan, Ollama fallback, opsiyonel ücretli; maliyet sayacı | ~2 hafta | v1.0 |
-| **4.2 — Automation Engine** | `automation/`: trigger/condition/action, DB'de kurallar, dashboard kural editörü | ~2-3 hafta | v1.0 |
-| **4.3 — Güvenlik sertleştirme** | git filter-repo sır temizliği, audit_log tüm kanallarda, TOTP 2FA, rate-limit FastAPI'ye | ~1 hafta | v1.0 |
-| **4.4 — React Native Android** | Mevcut FastAPI'yi tüketir; Cloudflare Tunnel/Tailscale uzak erişim; FCM push | ~3-4 hafta | v1.0 |
+| **4.2 — Scheduler + Automation** | `scheduler/` (zaman tabanlı: 09:00 görev oku, 22:00 backup — ayrı modül) + `automation/` (olay/koşul/eylem; tetikleyiciler: Event Bus + Scheduler), DB'de kurallar, dashboard kural editörü | ~2-3 hafta | v1.0 |
+| **4.3 — Planner/Executor** | `ai/planner.py` + `ai/executor.py`: çok adımlı görevler ("VSCode aç, projeyi tara, bug bul, GitHub issue oluştur") | ~2 hafta | v1.0 |
+| **4.4 — Güvenlik sertleştirme** | git filter-repo sır temizliği, audit_log tüm kanallarda, TOTP 2FA, rate-limit FastAPI'ye | ~1 hafta | v1.0 |
+| **4.5 — React Native Android** | Mevcut FastAPI'yi tüketir; Cloudflare Tunnel/Tailscale uzak erişim; FCM push | ~3-4 hafta | v1.0 |
 | **5.1 — Vision/OCR** | RapidOCR (offline, ücretsiz) + Groq vision; "ekrandaki hata ne?" senaryoları | v2.0 |
-| **5.2 — Plugin System** | Manifest + Python entrypoint; Spotify/Discord/OBS ilk eklentiler | v2.0 |
-| **5.3 — Proaktif AI** | Kullanım deseni analizi; overlay + Telegram öneri bildirimleri | v2.0 |
+| **5.2 — Proaktif AI** | Kullanım deseni analizi; overlay + Telegram öneri bildirimleri | v2.0 |
+| **6 — Plugin System** | Manifest + Python entrypoint; Spotify/Discord/OBS ilk eklentiler. *Bilinçli erteleme: Memory, Dashboard ve Automation çekirdeği oturmadan eklenti API'si sabitlenemez* | v2.0+ |
 
 Sıralama bağımlılığı (MVP içinde): **1 → 2 → 3** (FastAPI iskeleti olmadan dashboard olmaz; SQLite olmadan Memory Engine olmaz).
 
