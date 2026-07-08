@@ -1,0 +1,29 @@
+{
+  "telegram_bot_token": "",
+  "authorized_users": [],
+  "max_file_size_mb": 5000,
+  "allowed_download_paths": [
+    "C:/Users/KULLANICI/Downloads",
+    "C:/Users/KULLANICI/Documents"
+  ],
+  "blocked_file_extensions": [".exe", ".bat", ".cmd", ".msi", ".ps1", ".vbs", ".reg"],
+  "auto_screenshot_quality": 85,
+  "startup_webcam_photo": true,
+  "max_audio_duration": 120,
+  "log_retention_days": 30,
+  "quick_files": {},
+  "rate_limits": {
+    "screenshot": 60,
+    "status": 10,
+    "processes": 15
+  },
+  "widget": {
+    "position_x": 0,
+    "position_y": 14,
+    "width": 410,
+    "opacity": 0.92,
+    "always_on_top": false,
+    "theme": "dark",
+    "launchers": []
+  }
+}

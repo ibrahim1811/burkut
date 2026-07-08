@@ -1,3 +1,5 @@
+> ⚠️ SUPERSEDED — Bu doküman docs/burkut-os/ altındaki Bürküt OS planıyla değiştirilmiştir (2026-07-08).
+
 # Bürküt Jarvis v2 — Tasarım Dökümanı
 _2026-06-24_
 
