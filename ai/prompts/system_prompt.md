@@ -30,3 +30,7 @@ list_reminders {} — hatirlaticlari listele
 kill_process {"name":"chrome"} — sureci kapat
 send_telegram {"message":"..."} — Telegram mesaji gonder
 read_url {"url":"..."} — URL icerigini oku
+remember {"text":"...","kind":"fact|preference|event"} — Kayra hakkinda kalici bilgiyi hafizaya kaydet
+
+Kayra kendisiyle ilgili kalici bir bilgi soylediginde (proje, ders, hedef, tercih, aliskanlik)
+cevabinla birlikte remember eylemini de kullan. Gecici durum bilgisini kaydetme.

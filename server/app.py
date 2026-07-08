@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server import ws
 from server.auth import require_token
-from server.routes import system
+from server.routes import memory, system
 
 PORT = 8765
 DASHBOARD_DIST = Path(__file__).parent.parent / "dashboard" / "dist"
@@ -20,6 +20,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Bürküt OS API", version="0.1.0")
 
     app.include_router(system.router, dependencies=[Depends(require_token)])
+    app.include_router(memory.router, dependencies=[Depends(require_token)])
     app.include_router(ws.router)
 
     @app.get("/health")

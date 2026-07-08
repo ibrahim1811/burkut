@@ -427,6 +427,21 @@ async def _execute_action(action: dict, chat_id: int) -> Tuple[str, Optional[byt
             _telegram_sender(target, message)
             return "✅ Telegram mesajı gönderildi.", None
 
+        # Kalıcı hafızaya kaydet
+        elif name == "remember":
+            from memory import store as _mstore
+            text = params.get("text", "").strip()
+            if not text:
+                return "⚠️ Kaydedilecek metin boş.", None
+            _mstore.add_memory(text, kind=params.get("kind", "fact"), source="ai",
+                               importance=float(params.get("importance", 0.6)))
+            try:
+                from core.events import bus, MEMORY_ADDED
+                bus.emit(MEMORY_ADDED, {"text": text[:100]})
+            except Exception:
+                pass
+            return "🧠 Hafızaya kaydettim.", None
+
         else:
             return f"⚠️ Bilinmeyen eylem: `{name}`", None
 
@@ -539,6 +554,14 @@ class BurkutBrain:
         from datetime import datetime as _dt
         now_str = _dt.now().strftime("%d %B %Y, %H:%M")
         system_content = _load_system_prompt().replace("{datetime}", now_str)
+
+        try:
+            from memory.context_builder import build as _mem_ctx
+            ctx = _mem_ctx(user_message)
+            if ctx:
+                system_content += "\n\n" + ctx
+        except Exception:
+            pass
 
         messages = [{"role": "system", "content": system_content}]
         messages.extend(SEED_MESSAGES)
