@@ -454,6 +454,17 @@ def _start_widget() -> None:
         _log(f"Widget başlatılamadı: {e}")
 
 
+def _start_server() -> None:
+    if os.environ.get("BURKUT_SERVER", "on").lower() in ("off", "0", "false"):
+        return
+    try:
+        from server.app import start_in_thread
+        start_in_thread()
+        _log("Bürküt OS API sunucusu başlatıldı (http://localhost:8765).")
+    except Exception as e:
+        _log(f"API sunucusu başlatılamadı: {e}")
+
+
 def _start_voice(indicator=None) -> None:
     try:
         from voice.voice_assistant import start as voice_start
@@ -477,12 +488,20 @@ def main() -> None:
 
     _send_startup_photo()
     _start_widget()
+    _start_server()
     _start_voice()
 
     try:
         from voice.text_to_speech import speak as _tts_speak
         from ai.calendar_mgr import set_tts_callback
         set_tts_callback(_tts_speak)
+    except Exception:
+        pass
+
+    try:
+        import platform
+        from core.events import bus, PC_BOOTED
+        bus.emit(PC_BOOTED, {"hostname": platform.node()})
     except Exception:
         pass
 

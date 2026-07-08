@@ -9,6 +9,7 @@ import asyncio
 import subprocess
 import tempfile
 import os
+from pathlib import Path
 from typing import Optional, Tuple
 import requests
 import groq
@@ -40,7 +41,23 @@ _groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY") or None)
 # ── Sistem prompt'u ────────────────────────────────────────────────────────────
 # {datetime} her chat cagrısında anlık tarih/saatle doldurulur
 
-SYSTEM_PROMPT = """Sen Burkut'sun. Kayra'nin kisisel yapay zeka asistanisin.
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+def _load_system_prompt() -> str:
+    """ai/prompts/*.md varsa oradan yükle (kişilik dosyalardan yönetilir)."""
+    main = _PROMPTS_DIR / "system_prompt.md"
+    if not main.exists():
+        return _FALLBACK_SYSTEM_PROMPT
+    parts = [main.read_text(encoding="utf-8").strip()]
+    for extra in ("conversation_rules.md", "memory_rules.md"):
+        p = _PROMPTS_DIR / extra
+        if p.exists():
+            parts.append(p.read_text(encoding="utf-8").strip())
+    return "\n\n".join(parts)
+
+
+_FALLBACK_SYSTEM_PROMPT = """Sen Burkut'sun. Kayra'nin kisisel yapay zeka asistanisin.
 Kayra'nin PC'si: Windows 11, RTX 5070 Ti, 32GB RAM.
 Bugun: {datetime}
 
@@ -521,7 +538,7 @@ class BurkutBrain:
         # Sistem promptuna anlık tarih/saat enjekte et
         from datetime import datetime as _dt
         now_str = _dt.now().strftime("%d %B %Y, %H:%M")
-        system_content = SYSTEM_PROMPT.replace("{datetime}", now_str)
+        system_content = _load_system_prompt().replace("{datetime}", now_str)
 
         messages = [{"role": "system", "content": system_content}]
         messages.extend(SEED_MESSAGES)
