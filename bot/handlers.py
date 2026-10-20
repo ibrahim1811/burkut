@@ -1599,25 +1599,122 @@ async def cmd_hava(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 @authorized_only
 async def cmd_bahane(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/bahane [durum] — Duruma göre 3 bahane üretir."""
+    """/bahane [sayı] [durum] — Duruma göre bahane üretir (varsayılan 3, maks 10)."""
     user = update.effective_user
-    situation = " ".join(context.args) if context.args else ""
-    log_command(user.id, user.username or "unknown", f"/bahane {situation}")
+    args = list(context.args or [])
+    count = 3
+    if args and args[0].isdigit():
+        count = int(args.pop(0))
+    situation = " ".join(args)
+    log_command(user.id, user.username or "unknown", f"/bahane {count} {situation}")
 
     if not situation:
         await update.message.reply_text(
-            "🤥 Ne için bahane lazım?\nÖrnek: `/bahane toplantıya 20 dk geç kaldım`",
+            "🤥 Ne için bahane lazım?\n"
+            "Örnek: `/bahane toplantıya 20 dk geç kaldım`\n"
+            "Daha fazla: `/bahane 7 ödevi yapmadım`",
             parse_mode="Markdown",
         )
         return
 
     msg = await update.message.reply_text("🤥 Bahaneler pişiriliyor...")
-    from ai.bahane import generate_excuses
-    text = await asyncio.get_running_loop().run_in_executor(None, generate_excuses, situation)
+    await send_excuses(msg, context, situation, count)
+
+
+async def send_excuses(msg, context: ContextTypes.DEFAULT_TYPE, situation: str,
+                       count: int, avoid: str = None) -> None:
+    from ai.bahane import generate_excuses, MAX_COUNT
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    count = max(1, min(count, MAX_COUNT))
+    text = await asyncio.get_running_loop().run_in_executor(
+        None, generate_excuses, situation, count, avoid
+    )
     if not text:
         await msg.edit_text("❌ Bahane üretilemedi (Groq yanıt vermedi). Bu da bir bahane sayılır.")
         return
-    await msg.edit_text(f"🤥 Bahaneler: {situation}\n\n{text}")
+
+    key = uuid.uuid4().hex[:8]
+    context.user_data.setdefault("bahane", {})[key] = {
+        "situation": situation, "count": count, "last": text,
+    }
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("👎 Beğenmedim", callback_data=f"bahane_redo_{key}"),
+        InlineKeyboardButton("➕ 5 tane daha", callback_data=f"bahane_more_{key}"),
+    ]])
+    await msg.edit_text(f"🤥 Bahaneler: {situation}\n\n{text}", reply_markup=keyboard)
+
+
+@authorized_only
+async def bahane_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    _, action, key = query.data.split("_", 2)
+    state = context.user_data.get("bahane", {}).get(key)
+    if not state:
+        await query.edit_message_reply_markup(None)
+        await query.message.reply_text("⌛ Bu bahane oturumu süresi dolmuş, /bahane ile yeniden başla.")
+        return
+
+    await query.edit_message_reply_markup(None)
+    count = state["count"] if action == "redo" else 5
+    msg = await query.message.reply_text("🤥 Yeni bahaneler pişiriliyor...")
+    await send_excuses(msg, context, state["situation"], count, avoid=state["last"])
+
+
+@authorized_only
+async def cmd_cevapla(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/cevapla [mesaj] — Gelen mesaja 3 farklı tonda cevap yazar (veya bir mesajı yanıtlayarak kullan)."""
+    user = update.effective_user
+    incoming = " ".join(context.args) if context.args else ""
+    replied = update.message.reply_to_message
+    if not incoming and replied:
+        incoming = replied.text or replied.caption or ""
+    log_command(user.id, user.username or "unknown", f"/cevapla {truncate(incoming, 50)}")
+
+    if not incoming:
+        await update.message.reply_text(
+            "💬 Neye cevap yazayım?\n"
+            "Örnek: `/cevapla yarın erken gelebilir misin?`\n"
+            "Ya da bir mesajı yanıtlayıp `/cevapla` yaz.",
+            parse_mode="Markdown",
+        )
+        return
+
+    msg = await update.message.reply_text("💬 Cevaplar yazılıyor...")
+    await send_replies(msg, context, incoming)
+
+
+async def send_replies(msg, context: ContextTypes.DEFAULT_TYPE, incoming: str, avoid: str = None) -> None:
+    from ai.cevapla import generate_replies
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    text = await asyncio.get_running_loop().run_in_executor(None, generate_replies, incoming, avoid)
+    if not text:
+        await msg.edit_text("❌ Cevap üretilemedi (Groq yanıt vermedi). Sessiz kalmak da bir cevaptır.")
+        return
+
+    key = uuid.uuid4().hex[:8]
+    context.user_data.setdefault("cevapla", {})[key] = {"incoming": incoming, "last": text}
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("👎 Beğenmedim", callback_data=f"cevapla_redo_{key}"),
+    ]])
+    await msg.edit_text(f"💬 Gelen: {truncate(incoming, 200)}\n\n{text}", reply_markup=keyboard)
+
+
+@authorized_only
+async def cevapla_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    key = query.data.split("_", 2)[2]
+    state = context.user_data.get("cevapla", {}).get(key)
+    await query.edit_message_reply_markup(None)
+    if not state:
+        await query.message.reply_text("⌛ Bu oturumun süresi dolmuş, /cevapla ile yeniden başla.")
+        return
+
+    msg = await query.message.reply_text("💬 Yeni cevaplar yazılıyor...")
+    await send_replies(msg, context, state["incoming"], avoid=state["last"])
 
 
 @authorized_only

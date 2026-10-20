@@ -147,8 +147,11 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("oku", handlers.cmd_oku))
     app.add_handler(CommandHandler("kod", handlers.cmd_kod_analiz))
     app.add_handler(CommandHandler("bahane", handlers.cmd_bahane, block=False))
+    app.add_handler(CommandHandler("cevapla", handlers.cmd_cevapla, block=False))
 
     # Callback query handler (inline keyboard)
+    app.add_handler(CallbackQueryHandler(handlers.bahane_callback, pattern=r"^bahane_", block=False))
+    app.add_handler(CallbackQueryHandler(handlers.cevapla_callback, pattern=r"^cevapla_", block=False))
     app.add_handler(CallbackQueryHandler(callbacks.callback_handler))
 
     # Belge/dosya gönderme:
