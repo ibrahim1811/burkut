@@ -58,7 +58,7 @@ def send_result(cmd_id: str, ok: bool, data=None, error: str = "") -> None:
             f"{RENDER_URL}/agent/result",
             headers={"X-Agent-Token": AGENT_TOKEN},
             json={"id": cmd_id, "ok": ok, "data": data, "error": error},
-            timeout=5,
+            timeout=60,
         )
     except Exception as e:
         _log(f"Sonuç gönderme hatası: {e}")
@@ -80,6 +80,37 @@ def _cmd_screenshot(params: dict) -> tuple[bool, object]:
             img.save(buf, format="JPEG", quality=80)
             shots.append(base64.b64encode(buf.getvalue()).decode())
     return True, shots if params.get("all") else shots[0]
+
+
+def _cmd_screen_record(params: dict) -> tuple[bool, object]:
+    import mss
+    from PIL import Image
+    import io
+    seconds = max(3, min(int(params.get("seconds", 10)), 30))
+    fps = 4
+    frames = []
+    with mss.mss() as sct:
+        desktop = sct.monitors[0]
+        scale = min(1.0, 960 / desktop["width"])
+        size = (int(desktop["width"] * scale), int(desktop["height"] * scale))
+        for _ in range(seconds * fps):
+            started = time.time()
+            shot = sct.grab(desktop)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX").resize(size)
+            frames.append(img.quantize(colors=64))
+            time.sleep(max(0.0, 1 / fps - (time.time() - started)))
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:], duration=1000 // fps, loop=0)
+    return True, base64.b64encode(buf.getvalue()).decode()
+
+
+def _cmd_watch_check(params: dict) -> tuple[bool, object]:
+    import psutil
+    name = params.get("process", "").lower().strip()
+    running = bool(name) and any(
+        name in (p.info["name"] or "").lower() for p in psutil.process_iter(["name"])
+    )
+    return True, {"running": running, "cpu": psutil.cpu_percent(interval=1)}
 
 
 def _cmd_system_status(params: dict) -> tuple[bool, object]:
@@ -432,6 +463,8 @@ def _cmd_claude_cancel(params: dict) -> tuple[bool, object]:
 _HANDLERS = {
     # Mevcut
     "screenshot":    _cmd_screenshot,
+    "screen_record": _cmd_screen_record,
+    "watch_check":   _cmd_watch_check,
     "system_status": _cmd_system_status,
     "mouse_move":    _cmd_mouse_move,
     "mouse_click":   _cmd_mouse_click,

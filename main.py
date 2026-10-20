@@ -65,6 +65,8 @@ def register_handlers(app: Application) -> None:
     # Sistem izleme
     app.add_handler(CommandHandler("durum", handlers.cmd_status))
     app.add_handler(CommandHandler("ekran", handlers.cmd_screenshot))
+    app.add_handler(CommandHandler("izle", handlers.cmd_izle, block=False))
+    app.add_handler(CommandHandler("bekle", handlers.cmd_bekle))
     app.add_handler(CommandHandler("foto", handlers.cmd_foto))
     app.add_handler(CommandHandler("ses", handlers.cmd_ses))
     app.add_handler(CommandHandler("islemler", handlers.cmd_processes))

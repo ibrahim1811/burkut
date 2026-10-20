@@ -258,6 +258,146 @@ async def send_screenshots(bot: Bot, chat_id: int, data) -> None:
     await bot.send_media_group(chat_id, media=media)
 
 
+_watch_tasks: dict[int, asyncio.Task] = {}
+_wait_tasks: dict[int, dict[str, asyncio.Task]] = {}
+WATCH_MAX_SECONDS = 3600
+WAIT_MAX_SECONDS = 12 * 3600
+WAIT_POLL_SECONDS = 15
+CPU_IDLE_PERCENT = 20
+
+
+async def _watch_loop(bot: Bot, chat_id: int, interval: int) -> None:
+    from bot.agent_relay import send_to_agent
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + WATCH_MAX_SECONDS
+    try:
+        while loop.time() < deadline:
+            result = await send_to_agent("screenshot", {"all": True}, timeout=30.0)
+            if result and result.get("ok"):
+                await send_screenshots(bot, chat_id, result["data"])
+            await asyncio.sleep(interval)
+        await bot.send_message(chat_id, "👁️ İzleme 1 saat dolduğu için durdu.")
+    finally:
+        if _watch_tasks.get(chat_id) is asyncio.current_task():
+            _watch_tasks.pop(chat_id)
+
+
+@authorized_only
+async def cmd_izle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/izle [saniye] | /izle kayit [saniye] | /izle dur"""
+    import base64 as _b64
+    chat_id = update.effective_chat.id
+    args = [a.lower() for a in context.args]
+    log_command(update.effective_user.id, update.effective_user.username or "unknown", f"/izle {' '.join(args)}")
+
+    if args and args[0] == "dur":
+        task = _watch_tasks.pop(chat_id, None)
+        if task:
+            task.cancel()
+        await update.message.reply_text("👁️ İzleme durduruldu." if task else "💤 Açık bir izleme yok.")
+        return
+
+    if args and args[0] in ("kayit", "kayıt"):
+        seconds = int(args[1]) if len(args) > 1 and args[1].isdigit() else 10
+        seconds = max(3, min(seconds, 30))
+        msg = await update.message.reply_text(f"🎬 {seconds} sn ekran kaydı alınıyor...")
+        result = await _agent_cmd(update, "screen_record", {"seconds": seconds}, timeout=seconds + 90.0)
+        if result:
+            gif = io.BytesIO(_b64.b64decode(result["data"]))
+            gif.name = "ekran.gif"
+            await context.bot.send_animation(chat_id, animation=gif, caption=f"🎬 {seconds} sn ekran kaydı")
+            await msg.delete()
+        return
+
+    if args and not args[0].isdigit():
+        await update.message.reply_text(
+            "Kullanım:\n"
+            "• `/izle 30` — her 30 sn'de ekran görüntüsü (en fazla 1 saat)\n"
+            "• `/izle kayit 15` — 15 sn ekran kaydı (en fazla 30 sn)\n"
+            "• `/izle dur` — izlemeyi durdur",
+            parse_mode="Markdown",
+        )
+        return
+
+    interval = max(10, int(args[0])) if args else 30
+    if chat_id in _watch_tasks:
+        _watch_tasks.pop(chat_id).cancel()
+    _watch_tasks[chat_id] = context.application.create_task(_watch_loop(context.bot, chat_id, interval))
+    await update.message.reply_text(f"👁️ Her {interval} sn'de ekran gönderiliyor. Durdurmak için `/izle dur`", parse_mode="Markdown")
+
+
+async def _wait_loop(bot: Bot, chat_id: int, target: str) -> None:
+    from bot.agent_relay import send_to_agent
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + WAIT_MAX_SECONDS
+    idle_streak = 0
+    try:
+        while loop.time() < deadline:
+            await asyncio.sleep(WAIT_POLL_SECONDS)
+            result = await send_to_agent("watch_check", {"process": "" if target == "cpu" else target}, timeout=15.0)
+            if not result or not result.get("ok"):
+                continue
+            state = result["data"]
+            if target == "cpu":
+                idle_streak = idle_streak + 1 if state["cpu"] < CPU_IDLE_PERCENT else 0
+                if idle_streak >= 3:
+                    await bot.send_message(chat_id, f"✅ CPU boşa düştü (%{state['cpu']:.0f}). İş bitmiş görünüyor.")
+                    return
+            elif not state["running"]:
+                await bot.send_message(chat_id, f"✅ `{target}` kapandı.", parse_mode="Markdown")
+                return
+        await bot.send_message(chat_id, f"⏰ `{target}` için 12 saat bekledim, takibi bıraktım.", parse_mode="Markdown")
+    finally:
+        tasks = _wait_tasks.get(chat_id, {})
+        if tasks.get(target) is asyncio.current_task():
+            tasks.pop(target)
+
+
+@authorized_only
+async def cmd_bekle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/bekle [program|cpu] | /bekle dur [program] | /bekle"""
+    chat_id = update.effective_chat.id
+    args = [a.lower() for a in context.args]
+    tasks = _wait_tasks.setdefault(chat_id, {})
+    log_command(update.effective_user.id, update.effective_user.username or "unknown", f"/bekle {' '.join(args)}")
+
+    if not args:
+        if tasks:
+            await update.message.reply_text("⏳ Beklenenler:\n" + "\n".join(f"• {t}" for t in tasks))
+        else:
+            await update.message.reply_text(
+                "Kullanım:\n"
+                "• `/bekle obs` — program kapanınca haber verir\n"
+                "• `/bekle cpu` — CPU boşa düşünce haber verir (render/indirme bitti)\n"
+                "• `/bekle dur` — tüm beklemeleri iptal eder",
+                parse_mode="Markdown",
+            )
+        return
+
+    if args[0] == "dur":
+        targets = args[1:] or list(tasks)
+        for t in targets:
+            task = tasks.pop(t, None)
+            if task:
+                task.cancel()
+        await update.message.reply_text("🛑 Bekleme iptal edildi." if targets else "💤 Bekleyen bir şey yok.")
+        return
+
+    target = args[0]
+    if target != "cpu":
+        result = await _agent_cmd(update, "watch_check", {"process": target})
+        if not result:
+            return
+        if not result["data"]["running"]:
+            await update.message.reply_text(f"🤔 `{target}` adında çalışan bir program bulamadım.", parse_mode="Markdown")
+            return
+    if target in tasks:
+        tasks.pop(target).cancel()
+    tasks[target] = context.application.create_task(_wait_loop(context.bot, chat_id, target))
+    what = "CPU boşa düşünce" if target == "cpu" else f"`{target}` kapanınca"
+    await update.message.reply_text(f"⏳ Tamam, {what} haber vereceğim.", parse_mode="Markdown")
+
+
 @authorized_only
 @rate_limit("processes", seconds=15)
 async def cmd_processes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
