@@ -87,6 +87,7 @@ HELP = (
     "`/asistan` — Ses asistanı durumu\n"
     "  PC'de: Ctrl+Space bas → konuş → bırak\n\n"
     "⚙️ *DİĞER*\n"
+    "`/bahane [durum]` — 3 bahane üret (makul → efsane)\n"
     "`/menu` — Ana menüyü göster\n"
     "`/yardim` — Bu yardım mesajı"
 )

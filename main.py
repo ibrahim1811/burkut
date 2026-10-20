@@ -146,6 +146,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("hatirlatici", handlers.cmd_hatirlatici))
     app.add_handler(CommandHandler("oku", handlers.cmd_oku))
     app.add_handler(CommandHandler("kod", handlers.cmd_kod_analiz))
+    app.add_handler(CommandHandler("bahane", handlers.cmd_bahane, block=False))
 
     # Callback query handler (inline keyboard)
     app.add_handler(CallbackQueryHandler(callbacks.callback_handler))

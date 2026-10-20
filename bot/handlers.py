@@ -1598,6 +1598,29 @@ async def cmd_hava(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 @authorized_only
+async def cmd_bahane(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/bahane [durum] — Duruma göre 3 bahane üretir."""
+    user = update.effective_user
+    situation = " ".join(context.args) if context.args else ""
+    log_command(user.id, user.username or "unknown", f"/bahane {situation}")
+
+    if not situation:
+        await update.message.reply_text(
+            "🤥 Ne için bahane lazım?\nÖrnek: `/bahane toplantıya 20 dk geç kaldım`",
+            parse_mode="Markdown",
+        )
+        return
+
+    msg = await update.message.reply_text("🤥 Bahaneler pişiriliyor...")
+    from ai.bahane import generate_excuses
+    text = await asyncio.get_running_loop().run_in_executor(None, generate_excuses, situation)
+    if not text:
+        await msg.edit_text("❌ Bahane üretilemedi (Groq yanıt vermedi). Bu da bir bahane sayılır.")
+        return
+    await msg.edit_text(f"🤥 Bahaneler: {situation}\n\n{text}")
+
+
+@authorized_only
 async def cmd_haber(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/haber [kategori] — Güncel haberler."""
     user = update.effective_user
