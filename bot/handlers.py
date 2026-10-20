@@ -698,6 +698,39 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 @authorized_only
+async def cmd_dosya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/dosya [isim] — PC'de dosyayı bulur, tek eşleşmeyse direkt gönderir."""
+    import base64 as _b64
+    if not context.args:
+        await update.message.reply_text(
+            "Kullanım:\n"
+            "• `/dosya rapor.pdf` — PC'de bulup gönderir\n"
+            "• PC'ye dosya göndermek için dosyayı direkt bu sohbete at",
+            parse_mode="Markdown",
+        )
+        return
+    query = " ".join(context.args)
+    log_command(update.effective_user.id, update.effective_user.username or "unknown", f"/dosya {query}")
+    msg = await update.message.reply_text(f"🔍 `{query}` aranıyor...", parse_mode="Markdown")
+    result = await _agent_cmd(update, "find_file", {"query": query}, timeout=90.0)
+    if not result:
+        return
+    data = result["data"]
+    if "file" in data:
+        buf = io.BytesIO(_b64.b64decode(data["file"]["data"]))
+        await context.bot.send_document(update.effective_chat.id, document=buf, filename=data["file"]["name"])
+        await msg.delete()
+    elif data["matches"]:
+        lines = "\n".join(f"{i}. `{m}`" for i, m in enumerate(data["matches"], 1))
+        await msg.edit_text(
+            f"📂 Birden fazla eşleşme var. Tam adı yaz ya da `/indir [yol]` kullan:\n\n{lines}",
+            parse_mode="Markdown",
+        )
+    else:
+        await msg.edit_text(f"🤷 `{query}` bulunamadı.", parse_mode="Markdown")
+
+
+@authorized_only
 async def cmd_quicksend(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not context.args:
@@ -763,8 +796,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "size": doc.file_size,
     }
 
-    from core.file_manager import get_default_paths
-    paths = get_default_paths()
+    result = await _agent_cmd(update, "upload_paths", {})
+    if not result:
+        return
+    paths = result["data"]
+    context.user_data["upload_paths"] = paths
 
     await update.message.reply_text(
         f"📥 *`{doc.file_name}`* ({format_bytes(doc.file_size)}) alındı.\n\nNereye kaydedilsin?",

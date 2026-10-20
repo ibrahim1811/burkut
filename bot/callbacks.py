@@ -322,8 +322,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data.startswith("upload_path_"):
         idx = int(data[len("upload_path_"):])
-        from core.file_manager import get_default_paths
-        paths = get_default_paths()
+        paths = context.user_data.get("upload_paths", [])
         if idx >= len(paths):
             await query.edit_message_text("❌ Geçersiz seçim.")
             return
@@ -332,13 +331,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text("❌ Yüklenecek dosya bulunamadı.")
             return
         save_path = paths[idx]
-        await query.edit_message_text(f"📥 Dosya indiriliyor...\n`{pending['filename']}`")
-        from core.file_manager import receive_file
-        success, msg = await receive_file(
-            context.bot, pending["file_id"], save_path, pending["filename"]
+        await query.edit_message_text(f"📥 Dosya PC'ye indiriliyor...\n`{pending['filename']}`", parse_mode="Markdown")
+        try:
+            tg_file = await context.bot.get_file(pending["file_id"])
+        except Exception as e:
+            await query.edit_message_text(f"❌ Telegram dosyayı vermedi (bot API sınırı 20 MB): {e}")
+            return
+        result = await _agent_cb(
+            query, "save_telegram_file",
+            {"url": tg_file.file_path, "folder": save_path, "filename": pending["filename"]},
+            timeout=180.0,
         )
         context.user_data.pop("pending_upload", None)
-        await query.edit_message_text(msg, parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
+        if result:
+            await query.edit_message_text(result["data"], parse_mode="Markdown", reply_markup=back_to_menu_keyboard())
 
     # ── Bildirim yönetimi ────────────────────────────────────────────────
     elif data == "notify_stop_all":

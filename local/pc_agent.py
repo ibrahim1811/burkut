@@ -296,6 +296,46 @@ def _cmd_download_file(params: dict) -> tuple[bool, object]:
     return True, {"data": data, "name": _Path(path).name, "size": size}
 
 
+def _cmd_upload_paths(params: dict) -> tuple[bool, object]:
+    from utils.config_manager import get_config
+    return True, get_config().get("allowed_download_paths", [])
+
+
+def _cmd_find_file(params: dict) -> tuple[bool, object]:
+    from core.file_manager import search_files
+    query = params.get("query", "").strip().lower()
+    results = search_files(query)
+    exact = [r for r in results if r["name"].lower() == query]
+    pick = exact[0] if len(exact) == 1 else results[0] if len(results) == 1 else None
+    if pick:
+        ok, data = _cmd_download_file({"path": pick["path"]})
+        if not ok:
+            raise RuntimeError(data)
+        return True, {"file": data}
+    return True, {"matches": [f"{r['path']} ({r['size_str']})" for r in results[:10]]}
+
+
+def _cmd_save_telegram_file(params: dict) -> tuple[bool, object]:
+    from utils.config_manager import get_config
+    from utils.helpers import format_bytes
+    folder = Path(params["folder"]).expanduser().resolve()
+    allowed = [Path(p).expanduser().resolve() for p in get_config().get("allowed_download_paths", [])]
+    if not any(folder == a or a in folder.parents for a in allowed):
+        raise PermissionError(f"İzin verilmeyen klasör: {folder}")
+    url = params["url"]
+    if not url.startswith("http"):
+        token = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        url = f"https://api.telegram.org/file/bot{token}/{url}"
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = folder / Path(params["filename"]).name
+    with requests.get(url, stream=True, timeout=60) as r:
+        r.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in r.iter_content(1024 * 256):
+                f.write(chunk)
+    return True, f"✅ `{dest.name}` kaydedildi.\nKonum: `{dest}`\nBoyut: {format_bytes(dest.stat().st_size)}"
+
+
 def _cmd_mute(params: dict) -> tuple[bool, object]:
     from core.audio_controller import toggle_mute
     now_muted = toggle_mute()
@@ -465,6 +505,9 @@ _HANDLERS = {
     "screenshot":    _cmd_screenshot,
     "screen_record": _cmd_screen_record,
     "watch_check":   _cmd_watch_check,
+    "save_telegram_file": _cmd_save_telegram_file,
+    "upload_paths":       _cmd_upload_paths,
+    "find_file":          _cmd_find_file,
     "system_status": _cmd_system_status,
     "mouse_move":    _cmd_mouse_move,
     "mouse_click":   _cmd_mouse_click,

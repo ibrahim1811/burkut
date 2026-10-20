@@ -89,6 +89,7 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("gozat", handlers.cmd_browse))
     app.add_handler(CommandHandler("indir", handlers.cmd_download))
     app.add_handler(CommandHandler("ara", handlers.cmd_search))
+    app.add_handler(CommandHandler("dosya", handlers.cmd_dosya, block=False))
     app.add_handler(CommandHandler("hizligonder", handlers.cmd_quicksend))
 
     # Bildirimler

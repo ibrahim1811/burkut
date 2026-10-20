@@ -15,6 +15,8 @@ logger = get_logger()
 
 CHUNK_SIZE = 20 * 1024 * 1024  # 20MB chunk
 MAX_TELEGRAM_FILE = 50 * 1024 * 1024  # 50MB Telegram limiti
+SEARCH_TIME_LIMIT = 40
+SEARCH_SKIP_DIRS = {"AppData", "node_modules", "__pycache__", "venv", "site-packages", "Application Data"}
 
 # Aktif browse session'ları: { user_id: {"path": str, "files": list} }
 _browse_sessions: dict[int, dict] = {}
@@ -174,31 +176,37 @@ def search_files(query: str, search_paths: list[str] = None) -> list[dict]:
     if not search_paths:
         search_paths = get_default_paths()
 
+    import time
     results = []
+    seen: set[str] = set()
     query_lower = query.lower()
+    deadline = time.monotonic() + SEARCH_TIME_LIMIT
 
     for base_path in search_paths:
-        base = Path(base_path)
-        if not base.exists():
+        if not Path(base_path).exists():
             continue
-        try:
-            for entry in base.rglob("*"):
-                if len(results) >= 50:
-                    break
-                try:
-                    if entry.is_file() and query_lower in entry.name.lower():
-                        stat = entry.stat()
-                        results.append({
-                            "name": entry.name,
-                            "path": str(entry),
-                            "size": stat.st_size,
-                            "size_str": format_bytes(stat.st_size),
-                            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d.%m.%Y %H:%M"),
-                        })
-                except (PermissionError, OSError):
+        for root, dirs, files in os.walk(base_path):
+            if len(results) >= 50 or time.monotonic() > deadline:
+                return results
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SEARCH_SKIP_DIRS]
+            for name in files:
+                if query_lower not in name.lower():
                     continue
-        except PermissionError:
-            continue
+                full = os.path.join(root, name)
+                if full in seen:
+                    continue
+                seen.add(full)
+                try:
+                    stat = os.stat(full)
+                except OSError:
+                    continue
+                results.append({
+                    "name": name,
+                    "path": full,
+                    "size": stat.st_size,
+                    "size_str": format_bytes(stat.st_size),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%d.%m.%Y %H:%M"),
+                })
 
     return results
 
