@@ -174,11 +174,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data == "cmd_screenshot":
         await query.edit_message_text("📸 Ekran görüntüsü alınıyor...")
-        result = await _agent_cb(query, "screenshot", {}, timeout=20.0)
+        result = await _agent_cb(query, "screenshot", {"all": True}, timeout=30.0)
         if result:
-            import base64 as _b64, io as _io
-            buf = _io.BytesIO(_b64.b64decode(result["data"]))
-            await context.bot.send_photo(chat_id, photo=buf, caption="📸 Ekran görüntüsü")
+            from bot.handlers import send_screenshots
+            await send_screenshots(context.bot, chat_id, result["data"])
             await query.delete_message()
 
     elif data == "cmd_processes":

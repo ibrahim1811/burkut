@@ -70,13 +70,16 @@ def _cmd_screenshot(params: dict) -> tuple[bool, object]:
     import mss
     from PIL import Image
     import io
+    shots = []
     with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        shot = sct.grab(monitor)
-        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=80)
-    return True, base64.b64encode(buf.getvalue()).decode()
+        monitors = sct.monitors[1:] if params.get("all") else [sct.monitors[1]]
+        for monitor in monitors:
+            shot = sct.grab(monitor)
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+            shots.append(base64.b64encode(buf.getvalue()).decode())
+    return True, shots if params.get("all") else shots[0]
 
 
 def _cmd_system_status(params: dict) -> tuple[bool, object]:
@@ -350,6 +353,36 @@ def _cmd_show_notification(params: dict) -> tuple[bool, object]:
     return True, "Bildirim gösterildi."
 
 
+CLAUDE_TIMEOUT = 900
+
+
+def _cmd_claude_code(params: dict) -> tuple[bool, object]:
+    import shutil
+    import subprocess
+    prompt = params.get("prompt", "").strip()
+    if not prompt:
+        raise ValueError("Görev boş.")
+    cwd = Path.home()
+    head, sep, rest = prompt.partition(":")
+    folder = head.strip()
+    if sep and folder and " " not in folder and (Path.home() / folder).is_dir():
+        cwd, prompt = Path.home() / folder, rest.strip()
+    exe = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
+    try:
+        proc = subprocess.run(
+            [exe, "-p", prompt, "--dangerously-skip-permissions", "--output-format", "text"],
+            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL, timeout=CLAUDE_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"Claude Code {CLAUDE_TIMEOUT // 60} dakikada bitiremedi.")
+    output = proc.stdout.strip() or proc.stderr.strip() or "(çıktı yok)"
+    if proc.returncode != 0:
+        raise RuntimeError(output)
+    return True, f"📂 {cwd}\n\n{output}"
+
+
 _HANDLERS = {
     # Mevcut
     "screenshot":    _cmd_screenshot,
@@ -389,6 +422,7 @@ _HANDLERS = {
     "clipboard_get":   _cmd_clipboard_get,
     "clipboard_set":   _cmd_clipboard_set,
     "run_claude":      _cmd_run_claude,
+    "claude_code":     _cmd_claude_code,
     "press_key":          _cmd_press_key,
     "show_notification":  _cmd_show_notification,
 }

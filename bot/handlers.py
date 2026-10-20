@@ -238,12 +238,24 @@ async def cmd_screenshot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     log_command(user.id, user.username or "unknown", "/screenshot")
     msg = await update.message.reply_text("📸 Ekran görüntüsü alınıyor...")
-    result = await _agent_cmd(update, "screenshot", {}, timeout=20.0)
+    result = await _agent_cmd(update, "screenshot", {"all": True}, timeout=30.0)
     if result:
-        import base64 as _b64
-        buf = io.BytesIO(_b64.b64decode(result["data"]))
-        await context.bot.send_photo(update.effective_chat.id, photo=buf, caption="📸 Ekran görüntüsü")
+        await send_screenshots(context.bot, update.effective_chat.id, result["data"])
         await msg.delete()
+
+
+async def send_screenshots(bot: Bot, chat_id: int, data) -> None:
+    import base64 as _b64
+    from telegram import InputMediaPhoto
+    shots = data if isinstance(data, list) else [data]
+    if len(shots) == 1:
+        await bot.send_photo(chat_id, photo=io.BytesIO(_b64.b64decode(shots[0])), caption="📸 Ekran görüntüsü")
+        return
+    media = [
+        InputMediaPhoto(io.BytesIO(_b64.b64decode(s)), caption=f"🖥️ Ekran {i}")
+        for i, s in enumerate(shots, 1)
+    ]
+    await bot.send_media_group(chat_id, media=media)
 
 
 @authorized_only
@@ -1038,11 +1050,12 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not context.args:
         await update.message.reply_text(
-            "❌ Kullanım: `/yap [görev]`\n\n"
+            "❌ Kullanım: `/claude [klasör:] görev`\n\n"
+            "Klasör verilmezse C:\\Users\\Kayra içinde çalışır.\n\n"
             "Örnekler:\n"
-            "• `/yap bug fix yap ve pushla`\n"
-            "• `/yap requirements.txt güncelle`\n"
-            "• `/yap testleri çalıştır ve hataları düzelt`",
+            "• `/claude PcBot: logları incele, hatayı düzelt`\n"
+            "• `/claude masaüstündeki dosyaları düzenle`\n"
+            "• `/claude NeYiyorum: testleri çalıştır`",
             parse_mode="Markdown",
         )
         return
@@ -1082,8 +1095,10 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
-    result = await send_to_agent("run_claude", {"prompt": prompt}, timeout=330.0)
-    if result:
+    result = await send_to_agent("claude_code", {"prompt": prompt}, timeout=930.0)
+    if result and not result.get("ok"):
+        await msg.edit_text(f"❌ Claude Code hatası:\n{result.get('error', '?')[:3800]}")
+    elif result:
         output = result["data"]
         chunks = [output[i:i+3800] for i in range(0, max(len(output), 1), 3800)]
         header = "🦅 *Bürküt tamamladı*\n\n"

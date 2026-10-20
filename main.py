@@ -125,7 +125,8 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("asistan", handlers.cmd_voice_status))
 
     # Claude Code uzaktan tetikleme
-    app.add_handler(CommandHandler("yap", handlers.cmd_yap))
+    app.add_handler(CommandHandler("yap", handlers.cmd_yap, block=False))
+    app.add_handler(CommandHandler("claude", handlers.cmd_yap, block=False))
 
     # PC ekran bildirimi
     app.add_handler(CommandHandler("bildirim", handlers.cmd_bildirim))
