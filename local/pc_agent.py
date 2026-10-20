@@ -296,6 +296,13 @@ def _cmd_download_file(params: dict) -> tuple[bool, object]:
     return True, {"data": data, "name": _Path(path).name, "size": size}
 
 
+def _cmd_brain_action(params: dict) -> tuple[bool, object]:
+    import asyncio
+    from ai.brain import _execute_action
+    text, img = asyncio.run(_execute_action(params["action"], 0))
+    return True, {"text": text, "image": base64.b64encode(img).decode() if img else None}
+
+
 def _cmd_upload_paths(params: dict) -> tuple[bool, object]:
     from utils.config_manager import get_config
     return True, get_config().get("allowed_download_paths", [])
@@ -401,7 +408,7 @@ def _cmd_run_claude(params: dict) -> tuple[bool, object]:
     try:
         client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY"))
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": "Sen Bürküt'sün. Kayra'nın kişisel yapay zeka asistanısın. Türkçe yanıt ver."},
                 {"role": "user", "content": prompt},
@@ -507,6 +514,7 @@ _HANDLERS = {
     "watch_check":   _cmd_watch_check,
     "save_telegram_file": _cmd_save_telegram_file,
     "upload_paths":       _cmd_upload_paths,
+    "brain_action":       _cmd_brain_action,
     "find_file":          _cmd_find_file,
     "system_status": _cmd_system_status,
     "mouse_move":    _cmd_mouse_move,

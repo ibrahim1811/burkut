@@ -1,5 +1,5 @@
 """
-BÜRKÜT AI Beyni — Groq/llama-3.3-70b-versatile entegrasyonu ile akıllı konuşma ve PC kontrolü.
+BÜRKÜT AI Beyni — Groq (gpt-oss-120b + qwen vision) ile akıllı konuşma ve PC kontrolü.
 """
 
 import io
@@ -33,7 +33,11 @@ def set_telegram_sender(fn) -> None:
     _telegram_sender = fn
 
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
+VISION_MODEL = "qwen/qwen3.8-27b"
+PC_ACTION_TIMEOUT = 120.0
+# Render'da çalışabilen eylemler; geri kalanı PC agent'a yönlendirilir
+SERVER_ACTIONS = {"weather", "news", "read_url", "set_reminder", "list_reminders", "send_telegram", "remember"}
 
 # Groq istemcisi
 _groq_client = groq.Groq(api_key=os.environ.get("GROQ_API_KEY") or None)
@@ -145,6 +149,13 @@ SEED_MESSAGES = [
     # URL oku
     {"role": "user", "content": "su siteyi oku: https://example.com"},
     {"role": "assistant", "content": "Okuyorum.\n<EYLEM>{\"action\":\"read_url\",\"params\":{\"url\":\"https://example.com\"}}</EYLEM>"},
+    # PC farkındalığı
+    {"role": "user", "content": "ekrandaki hata ne"},
+    {"role": "assistant", "content": "Bakiyorum.\n<EYLEM>{\"action\":\"screen_look\",\"params\":{\"question\":\"Ekrandaki hata ne ve nasil cozulur?\"}}</EYLEM>"},
+    {"role": "user", "content": "bilgisayar cok kasiyor neden"},
+    {"role": "assistant", "content": "Kontrol ediyorum.\n<EYLEM>{\"action\":\"diagnose_slow\",\"params\":{}}</EYLEM>"},
+    {"role": "user", "content": "en son ne yapiyordum"},
+    {"role": "assistant", "content": "Bakiyorum.\n<EYLEM>{\"action\":\"recent_activity\",\"params\":{}}</EYLEM>"},
 ]
 
 
@@ -157,11 +168,9 @@ def is_groq_available() -> bool:
 
 def get_available_models() -> list:
     return [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "llama-3.1-70b-versatile",
-        "gemma2-9b-it",
-        "mixtral-8x7b-32768",
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.8-27b",
     ]
 
 
@@ -219,23 +228,87 @@ def _parse_actions(text: str) -> Tuple[str, list]:
 
 # ── Eylem çalıştırıcısı ───────────────────────────────────────────────────────
 
+async def _relay_to_pc(action: dict) -> Tuple[str, Optional[bytes]]:
+    import base64
+    from bot.agent_relay import send_to_agent, agent_is_online
+    if not agent_is_online():
+        return "🔌 PC agent çevrimdışı.", None
+    result = await send_to_agent("brain_action", {"action": action}, timeout=PC_ACTION_TIMEOUT)
+    if result is None:
+        return "⏰ PC agent yanıt vermedi.", None
+    if not result.get("ok"):
+        return f"❌ PC hatası: {result.get('error', '?')}", None
+    data = result["data"]
+    return data["text"], base64.b64decode(data["image"]) if data.get("image") else None
+
+
+def _interpret(instruction: str, facts: str) -> str:
+    answer = _call_groq([
+        {"role": "system", "content": "Sen Bürküt'sün, Kayra'nın PC asistanı. Türkçe, samimi, kısa ve net konuş. Madde işaretleri kullanabilirsin."},
+        {"role": "user", "content": f"{instruction}\n\nVeriler:\n{facts}"},
+    ])
+    return answer or f"(Yorumlanamadı, ham veri:)\n{facts}"
+
+
+def _ask_vision(question: str, jpeg: bytes) -> str:
+    import base64
+    url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+    try:
+        completion = _groq_client.chat.completions.create(
+            model=VISION_MODEL,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": f"Bu Kayra'nın bilgisayar ekranı (tüm monitörler yan yana). Türkçe, kısa ve net cevap ver.\n\nSoru: {question}"},
+                {"type": "image_url", "image_url": {"url": url}},
+            ]}],
+            timeout=90,
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Vision hatası: {e}")
+        return f"❌ Ekranı yorumlayamadım: {e}"
+
+
 async def _execute_action(action: dict, chat_id: int) -> Tuple[str, Optional[bytes]]:
     """Eylemi çalıştır. (metin_sonucu, görüntü_bytes_veya_None) döndür."""
+    import sys
     name = action.get("action", "").strip()
     params = action.get("params", {})
 
+    if sys.platform != "win32" and name not in SERVER_ACTIONS:
+        return await _relay_to_pc(action)
+
+    loop = asyncio.get_running_loop()
     try:
         # Ekran görüntüsü
         if name == "screenshot":
-            import mss
-            from PIL import Image
-            with mss.mss() as sct:
-                monitor = sct.monitors[1]
-                shot = sct.grab(monitor)
-                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=80, optimize=True)
-            return "📸 Ekran görüntüsü alındı.", buf.getvalue()
+            from core.pc_insight import capture_desktop_jpeg
+            jpeg = await loop.run_in_executor(None, lambda: capture_desktop_jpeg(3840, 80))
+            return "📸 Ekran görüntüsü alındı.", jpeg
+
+        elif name == "screen_look":
+            from core.pc_insight import capture_desktop_jpeg
+            question = params.get("question", "").strip() or "Ekranda ne var?"
+            jpeg = await loop.run_in_executor(None, capture_desktop_jpeg)
+            answer = await loop.run_in_executor(None, _ask_vision, question, jpeg)
+            return f"👁️ {answer}", jpeg
+
+        elif name == "diagnose_slow":
+            from core.pc_insight import slowness_facts
+            facts = await loop.run_in_executor(None, slowness_facts)
+            answer = await loop.run_in_executor(None, _interpret,
+                "Kayra bilgisayarının neden yavaş olduğunu soruyor. Verilere bakıp asıl sebebi sade bir dille söyle "
+                "(normal görünüyorsa bunu da söyle) ve kapatılabilecek programları öner. Sistem süreçlerini kapatmayı önerme.",
+                facts)
+            return f"🩺 {answer}", None
+
+        elif name == "recent_activity":
+            from core.pc_insight import recent_activity_facts
+            facts = await loop.run_in_executor(None, recent_activity_facts)
+            answer = await loop.run_in_executor(None, _interpret,
+                "Kayra en son bilgisayarda ne yaptığını soruyor. Açık pencerelere ve son değişen dosyalara bakıp "
+                "hangi projelerde/işlerde olduğunu ve nerede kaldığını kısaca özetle. Önbellek/sistem dosyalarını yok say.",
+                facts)
+            return f"🧭 {answer}", None
 
         # Fare hareketi
         elif name == "mouse_move":

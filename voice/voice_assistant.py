@@ -114,7 +114,7 @@ def _on_stop():
 def _groq_nlu(text: str) -> dict:
     try:
         completion = _groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[
                 {"role": "system", "content": _NLU_SYSTEM},
                 {"role": "user", "content": text},
@@ -140,7 +140,7 @@ def _handle_intent(intent: str, params: dict) -> None:
             city = params.get("city", "Istanbul")
             full = get_weather(city)
             summary = _groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 messages=[
                     {"role": "system", "content": "Aşağıdaki hava durumu verisini sesli asistan için 1-2 cümleye özetle. Sadece metin yaz, emoji yok."},
                     {"role": "user", "content": full},

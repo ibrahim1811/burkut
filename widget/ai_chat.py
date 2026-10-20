@@ -237,7 +237,7 @@ class AIChatWindow(QWidget):
         from ai.brain import is_groq_available, get_available_models
         if is_groq_available():
             models = get_available_models()
-            model = models[0] if models else "llama-3.3-70b-versatile"
+            model = models[0] if models else "openai/gpt-oss-120b"
             msg = f"Merhaba! Ben Bürküt AI, {model} modeliyle çalışıyorum. Nasıl yardımcı olabilirim?"
         else:
             msg = "⚠️ Groq API bağlantısı yok. GROQ_API_KEY değişkenini .env dosyasına ekleyin."

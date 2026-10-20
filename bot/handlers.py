@@ -1444,6 +1444,33 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _send_ai_response(update, context, thinking_msg, text_resp, action_results, images)
 
 
+async def _run_insight(update: Update, context: ContextTypes.DEFAULT_TYPE, action: dict, waiting: str) -> None:
+    from ai.brain import _execute_action
+    log_command(update.effective_user.id, update.effective_user.username or "unknown", f"/{action['action']}")
+    thinking_msg = await update.message.reply_text(waiting)
+    text, image = await _execute_action(action, update.effective_chat.id)
+    await _send_ai_response(update, context, thinking_msg, "", [text], [image] if image else [])
+
+
+@authorized_only
+async def cmd_bak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/bak [soru] — ekrana bakıp soruyu cevaplar."""
+    question = " ".join(context.args) or "Ekranda ne var?"
+    await _run_insight(update, context, {"action": "screen_look", "params": {"question": question}}, "👁️ Ekrana bakıyorum...")
+
+
+@authorized_only
+async def cmd_yavas(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/yavas — bilgisayar neden yavaş?"""
+    await _run_insight(update, context, {"action": "diagnose_slow", "params": {}}, "🩺 Sistemi inceliyorum...")
+
+
+@authorized_only
+async def cmd_neyapiyordum(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/neyapiyordum — en son ne yapıyordum?"""
+    await _run_insight(update, context, {"action": "recent_activity", "params": {}}, "🧭 Son yaptıklarına bakıyorum...")
+
+
 @authorized_only
 async def cmd_burkut(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/burkut [mesaj] — BÜRKÜT ile AI sohbet."""
@@ -1527,7 +1554,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines = ["🤖 *Yüklü Modeller*\n━━━━━━━━━━━━━━━━━━━━━━\n"]
         for m in models:
             lines.append(f"• `{m}`")
-        lines.append("\nDeğiştirmek için: `/model llama3`")
+        lines.append("\nDeğiştirmek için: `/model gpt-oss-20b`")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         return
 
