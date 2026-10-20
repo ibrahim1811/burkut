@@ -354,33 +354,79 @@ def _cmd_show_notification(params: dict) -> tuple[bool, object]:
 
 
 CLAUDE_TIMEOUT = 900
+_NO_WINDOW = getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0)
+_claude_jobs: dict[int, dict] = {}
+_claude_lock = threading.Lock()
+
+
+def _kill_tree(pid: int) -> None:
+    import subprocess
+    subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, creationflags=_NO_WINDOW)
 
 
 def _cmd_claude_code(params: dict) -> tuple[bool, object]:
     import shutil
     import subprocess
     prompt = params.get("prompt", "").strip()
-    if not prompt:
-        raise ValueError("Görev boş.")
+    cont = bool(params.get("continue"))
     cwd = Path.home()
     head, sep, rest = prompt.partition(":")
     folder = head.strip()
     if sep and folder and " " not in folder and (Path.home() / folder).is_dir():
         cwd, prompt = Path.home() / folder, rest.strip()
+    if not prompt:
+        if not cont:
+            raise ValueError("Görev boş.")
+        prompt = "Kaldığın yerden devam et."
     exe = shutil.which("claude") or str(Path.home() / ".local" / "bin" / "claude.exe")
+    args = [exe, "-p", prompt, "--dangerously-skip-permissions", "--output-format", "text"]
+    if cont:
+        args.insert(1, "--continue")
+    proc = subprocess.Popen(
+        args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+        text=True, encoding="utf-8", errors="replace", creationflags=_NO_WINDOW,
+    )
+    job = {"proc": proc, "cwd": cwd, "prompt": prompt, "started": time.time(), "cancelled": False}
+    with _claude_lock:
+        _claude_jobs[proc.pid] = job
     try:
-        proc = subprocess.run(
-            [exe, "-p", prompt, "--dangerously-skip-permissions", "--output-format", "text"],
-            cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            stdin=subprocess.DEVNULL, timeout=CLAUDE_TIMEOUT,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        out, err = proc.communicate(timeout=CLAUDE_TIMEOUT)
     except subprocess.TimeoutExpired:
+        _kill_tree(proc.pid)
+        proc.communicate()
         raise TimeoutError(f"Claude Code {CLAUDE_TIMEOUT // 60} dakikada bitiremedi.")
-    output = proc.stdout.strip() or proc.stderr.strip() or "(çıktı yok)"
+    finally:
+        with _claude_lock:
+            _claude_jobs.pop(proc.pid, None)
+    if job["cancelled"]:
+        raise RuntimeError("⛔ Görev iptal edildi.")
+    output = out.strip() or err.strip() or "(çıktı yok)"
     if proc.returncode != 0:
         raise RuntimeError(output)
     return True, f"📂 {cwd}\n\n{output}"
+
+
+def _cmd_claude_status(params: dict) -> tuple[bool, object]:
+    with _claude_lock:
+        jobs = list(_claude_jobs.values())
+    if not jobs:
+        return True, "💤 Çalışan Claude Code görevi yok."
+    lines = [f"🦅 {len(jobs)} görev çalışıyor:"]
+    for i, job in enumerate(jobs, 1):
+        mins, secs = divmod(int(time.time() - job["started"]), 60)
+        lines.append(f"\n{i}. 📂 {job['cwd'].name} · ⏱ {mins} dk {secs} sn\n{job['prompt'][:150]}")
+    return True, "\n".join(lines)
+
+
+def _cmd_claude_cancel(params: dict) -> tuple[bool, object]:
+    with _claude_lock:
+        jobs = list(_claude_jobs.values())
+    if not jobs:
+        return True, "💤 İptal edilecek görev yok."
+    for job in jobs:
+        job["cancelled"] = True
+        _kill_tree(job["proc"].pid)
+    return True, f"⛔ {len(jobs)} görev iptal edildi."
 
 
 _HANDLERS = {
@@ -423,6 +469,8 @@ _HANDLERS = {
     "clipboard_set":   _cmd_clipboard_set,
     "run_claude":      _cmd_run_claude,
     "claude_code":     _cmd_claude_code,
+    "claude_status":   _cmd_claude_status,
+    "claude_cancel":   _cmd_claude_cancel,
     "press_key":          _cmd_press_key,
     "show_notification":  _cmd_show_notification,
 }

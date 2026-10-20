@@ -1055,7 +1055,10 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "Örnekler:\n"
             "• `/claude PcBot: logları incele, hatayı düzelt`\n"
             "• `/claude masaüstündeki dosyaları düzenle`\n"
-            "• `/claude NeYiyorum: testleri çalıştır`",
+            "• `/claude NeYiyorum: testleri çalıştır`\n\n"
+            "• `/claude devam PcBot: şunu da ekle` — o klasördeki son oturumu sürdürür\n"
+            "• `/claude durum` — çalışan görevler\n"
+            "• `/claude iptal` — çalışan görevleri durdurur",
             parse_mode="Markdown",
         )
         return
@@ -1063,7 +1066,15 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     import asyncio as _asyncio
     from bot.agent_relay import agent_is_online, send_to_agent
 
-    prompt = " ".join(context.args)
+    sub = context.args[0].lower()
+    if sub in ("durum", "iptal"):
+        result = await _agent_cmd(update, "claude_status" if sub == "durum" else "claude_cancel", {})
+        if result:
+            await update.message.reply_text(result["data"])
+        return
+
+    cont = sub == "devam"
+    prompt = " ".join(context.args[1:] if cont else context.args)
     log_command(user.id, user.username or "unknown", f"/yap {prompt[:60]}")
 
     msg = await update.message.reply_text(
@@ -1095,7 +1106,7 @@ async def cmd_yap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
-    result = await send_to_agent("claude_code", {"prompt": prompt}, timeout=930.0)
+    result = await send_to_agent("claude_code", {"prompt": prompt, "continue": cont}, timeout=930.0)
     if result and not result.get("ok"):
         await msg.edit_text(f"❌ Claude Code hatası:\n{result.get('error', '?')[:3800]}")
     elif result:
